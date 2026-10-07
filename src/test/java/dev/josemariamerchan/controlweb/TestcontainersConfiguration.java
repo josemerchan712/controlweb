@@ -7,17 +7,26 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
 /**
- * Provides a PostgreSQL 16 container for integration tests. The container is a bean, so Spring
- * reuses it across test classes that share the same application context, which keeps the number
- * of running containers (and memory usage) low.
+ * Provides a PostgreSQL 16 container for integration tests. There is ONE container per test JVM,
+ * shared by every Spring context (the dev laptop only has 8 GB of RAM). Testcontainers' Ryuk
+ * sidecar removes it when the JVM ends, so Spring must not stop it ({@code destroyMethod = ""}).
+ *
+ * <p>Because the database is shared, tests that commit data must clean up after themselves.
  */
 @TestConfiguration(proxyBeanMethods = false)
 public class TestcontainersConfiguration {
 
-	@Bean
+	private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer(
+			DockerImageName.parse("postgres:16-alpine"));
+
+	static {
+		POSTGRES.start();
+	}
+
+	@Bean(destroyMethod = "")
 	@ServiceConnection
 	PostgreSQLContainer postgresContainer() {
-		return new PostgreSQLContainer(DockerImageName.parse("postgres:16-alpine"));
+		return POSTGRES;
 	}
 
 }

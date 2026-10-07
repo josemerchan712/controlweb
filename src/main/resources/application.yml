@@ -14,6 +14,16 @@ spring:
       # The schema is owned by Flyway; Hibernate only validates the mapping.
       ddl-auto: validate
 
+app:
+  checker:
+    # SSRF guard. Keep false everywhere except local development and tests (see application-dev.yml).
+    allow-private-hosts: false
+  # Thresholds of the alert rules created for every new site.
+  alert-defaults:
+    down-consecutive-failures: 2
+    high-latency-ms: 2000
+    ssl-expiry-days: 14
+
 management:
   endpoints:
     web:

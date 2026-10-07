@@ -46,11 +46,30 @@ public class Site {
 		// required by JPA
 	}
 
+	/** A new active, private site. */
 	public Site(String name, String url, int checkIntervalSeconds, Instant now) {
+		this(name, url, checkIntervalSeconds, true, false, now);
+	}
+
+	public Site(String name, String url, int checkIntervalSeconds, boolean active, boolean publicVisible,
+			Instant now) {
 		this.name = name;
 		this.url = url;
 		this.checkIntervalSeconds = checkIntervalSeconds;
+		this.active = active;
+		this.publicVisible = publicVisible;
 		this.createdAt = now;
+		this.updatedAt = now;
+	}
+
+	/** Replaces the user-editable settings. */
+	public void update(String name, String url, int checkIntervalSeconds, boolean active, boolean publicVisible,
+			Instant now) {
+		this.name = name;
+		this.url = url;
+		this.checkIntervalSeconds = checkIntervalSeconds;
+		this.active = active;
+		this.publicVisible = publicVisible;
 		this.updatedAt = now;
 	}
 

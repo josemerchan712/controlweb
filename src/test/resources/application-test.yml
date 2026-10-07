@@ -1,0 +1,4 @@
+# Active in every test run (set in pom.xml). Tests that exercise the SSRF guard override this property.
+app:
+  checker:
+    allow-private-hosts: true

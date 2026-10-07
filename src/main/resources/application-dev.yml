@@ -1,0 +1,5 @@
+# Local development: allow monitoring apps running on this machine (localhost, LAN).
+# NEVER activate this profile in production.
+app:
+  checker:
+    allow-private-hosts: true

@@ -38,7 +38,28 @@ docker compose down                # parar la base de datos
 
 ## Estado
 - Paso 0 (scaffold): hecho.
-- Paso 1 (esquema Flyway V1 + entidades + tests de repositorio): hecho. Siguiente: paso 2 (CRUD de sitios + SSRF).
+- Paso 1 (esquema Flyway V1 + entidades + tests de repositorio): hecho.
+- Paso 2 (CRUD de sitios + protección SSRF): hecho. Siguiente: paso 3 (seguridad JWT).
+  **Los endpoints `/api/sites` están abiertos hasta el paso 3** (aún no hay Spring Security).
+
+## CRUD de sitios y SSRF (paso 2)
+- `SiteUrlNormalizer` canonicaliza la URL antes de guardar (esquema y host en minúsculas, sin punto final en el host,
+  sin puerto por defecto, sin fragmento, sin `/` raíz redundante) para que `UNIQUE(sites.url)` sea efectivo. Rechaza
+  credenciales embebidas (`user:pass@host`) y esquemas distintos de http/https. Las rutas y queries no se tocan
+  (una `/` final en una ruta real sí es significativa).
+- `HostSafetyValidator` (`common/net`) es el guard SSRF: resuelve el host con un `HostResolver` **inyectable**
+  (`DnsHostResolver` en producción, un fake en los tests) y rechaza loopback, privadas, link-local (169.254/16),
+  multicast, reservadas, CGNAT y IPv4 embebida en IPv6 (mapped, compatible, NAT64, 6to4). Si CUALQUIER IP del host
+  es no pública, se rechaza. Un host que no resuelve se acepta (el checker lo registrará como caído).
+- Se activa con `app.checker.allow-private-hosts` (`false` por defecto; `true` en los perfiles `dev` y `test`).
+  Se valida al crear/editar y **debe volver a validarse antes de cada petición y salto de redirección** (paso 4).
+- Límite conocido: DNS rebinding entre la validación y la conexión (ventana mínima); cerrarlo exigiría fijar la IP.
+- Al crear un sitio se crean sus 3 reglas por defecto (`app.alert-defaults.*` en `application.yml`).
+- Borrar un sitio es **un solo `deleteById`**; checks, reglas e incidencias caen por `ON DELETE CASCADE`.
+- Errores en `ProblemDetail` (`GlobalExceptionHandler`): 400 validación (con mapa `errors`), URL inválida o host no
+  permitido; 404 sitio inexistente; 409 URL duplicada.
+- Tests: perfil `test` activo por `pom.xml` (surefire). Un único contenedor PostgreSQL por JVM de test, compartido
+  entre contextos (`TestcontainersConfiguration`); los tests que hacen commit deben limpiar sus datos.
 
 ## Modelo de datos (`V1__init.sql`)
 Tablas `users`, `sites`, `checks`, `alert_rules`, `incidents`. Detalles que importan:
