@@ -1,0 +1,24 @@
+# Development database only. One PostgreSQL 16 with a small memory footprint.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: controlweb-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-controlweb}
+      POSTGRES_USER: ${DB_USERNAME:-controlweb}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in your .env file}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    mem_limit: 256m
+    command: ["postgres", "-c", "shared_buffers=64MB", "-c", "max_connections=30"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-controlweb} -d ${DB_NAME:-controlweb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

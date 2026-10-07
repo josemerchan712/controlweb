@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: controlweb
+  # Local convenience: load variables from a git-ignored .env file if present.
+  config:
+    import: optional:file:.env[.properties]
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/controlweb}
+    username: ${DB_USERNAME:controlweb}
+    password: ${DB_PASSWORD:}
+  jpa:
+    open-in-view: false
+    hibernate:
+      # The schema is owned by Flyway; Hibernate only validates the mapping.
+      ddl-auto: validate
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
