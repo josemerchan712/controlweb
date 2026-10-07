@@ -37,7 +37,17 @@ docker compose down                # parar la base de datos
 ```
 
 ## Estado
-- Paso 0 (scaffold): hecho. Siguiente: paso 1 (esquema Flyway + entidades).
+- Paso 0 (scaffold): hecho.
+- Paso 1 (esquema Flyway V1 + entidades + tests de repositorio): hecho. Siguiente: paso 2 (CRUD de sitios + SSRF).
+
+## Modelo de datos (`V1__init.sql`)
+Tablas `users`, `sites`, `checks`, `alert_rules`, `incidents`. Detalles que importan:
+- `type` y `role` son `varchar` + `CHECK` (no ENUM de PostgreSQL), mapeados con `@Enumerated(STRING)`.
+- `incidents` tiene el índice único parcial `uq_incidents_one_open_per_site_type (site_id, type) WHERE resolved_at IS NULL`:
+  la base de datos impide dos incidencias abiertas del mismo tipo para un sitio (no se repiten alertas ni con concurrencia).
+- Borrar un sitio borra en cascada (a nivel de BD) sus checks, reglas e incidencias.
+- Las entidades no tienen setters públicos ni usan `Clock` internamente: reciben el `Instant` desde el servicio.
+- Los tests de repositorio usan `@PostgresDataJpaTest` (PostgreSQL real con Flyway, no H2) para poder probar constraints.
 
 ## Fuera de la fase 1
 Frontend React + Vite, Dockerfile y despliegue en Hetzner, refresh tokens.

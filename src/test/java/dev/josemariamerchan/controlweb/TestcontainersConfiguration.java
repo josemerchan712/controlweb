@@ -12,7 +12,7 @@ import org.testcontainers.utility.DockerImageName;
  * of running containers (and memory usage) low.
  */
 @TestConfiguration(proxyBeanMethods = false)
-class TestcontainersConfiguration {
+public class TestcontainersConfiguration {
 
 	@Bean
 	@ServiceConnection
