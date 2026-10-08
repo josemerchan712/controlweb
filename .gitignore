@@ -40,3 +40,4 @@ build/
 ### OS ###
 Thumbs.db
 .DS_Store
+!deploy/.env.prod.example

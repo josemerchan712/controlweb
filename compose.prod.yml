@@ -1,0 +1,133 @@
+# Production stack of ControlWeb (see docs/DESPLIEGUE.md). Used on the VPS as:
+#
+#   docker compose -p controlweb -f compose.prod.yml --env-file /opt/controlweb/.env.prod up -d
+#
+# NO value in this file is a secret. Every secret and every environment-specific value is a reference to a variable that
+# comes from /opt/controlweb/.env.prod (outside the repository, 640 root:jose). A required variable written as
+# ${NAME:?message} makes `docker compose` refuse to start when it is missing, so a forgotten secret cannot become an empty one.
+# This file does not use env_file: the variables are passed with --env-file, like the Rotten Odds stack.
+#
+# Networks (created in step S4 / by this file):
+#   controlweb_proxy   created BY HAND once (internal, fixed subnet): Caddy <-> the application. Caddy has 10.77.0.10.
+#   controlweb_db      internal: the application <-> its own PostgreSQL. Nothing else is on it.
+#   controlweb_egress  the only network with a way out to the internet: ONLY the application is on it. The egress
+#                      firewall (docs/DESPLIEGUE.md) is attached to its bridge, cw-egress.
+# ControlWeb is never on a Rotten Odds network.
+
+name: controlweb
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  controlweb-app:
+    # The tag is the release (the commit hash) loaded by the deploy script; "current" is what runs, "previous" is the rollback.
+    image: controlweb-app:${CONTROLWEB_TAG:-current}
+    restart: unless-stopped
+    depends_on:
+      controlweb-db:
+        condition: service_healthy
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 1.0
+    logging: *logging
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      # PROVISIONAL JVM flags: the final -Xmx is decided after the 10-minute measurement (docs/DESPLIEGUE.md, C6).
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:+UseSerialGC -Xms128m -Xmx256m -XX:MaxMetaspaceSize=160m -XX:ReservedCodeCacheSize=64m -Xss512k -XX:MaxDirectMemorySize=32m -XX:+ExitOnOutOfMemoryError}
+      DB_URL: jdbc:postgresql://controlweb-db:5432/${DB_NAME:-controlweb}
+      DB_USERNAME: ${DB_USERNAME:?DB_USERNAME is required (set it in .env.prod)}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required (set it in .env.prod)}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (set it in .env.prod)}
+      JWT_TTL_MINUTES: ${JWT_TTL_MINUTES:-60}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?ADMIN_EMAIL is required (set it in .env.prod)}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required (set it in .env.prod)}
+      TRUSTED_PROXY_ADDRESSES: ${TRUSTED_PROXY_ADDRESSES:?TRUSTED_PROXY_ADDRESSES is required (the fixed IP of Caddy, see docs/DESPLIEGUE.md)}
+      PUBLIC_CORS_ALLOWED_ORIGINS: ${PUBLIC_CORS_ALLOWED_ORIGINS:?PUBLIC_CORS_ALLOWED_ORIGINS is required (the origin of the portfolio)}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      HEARTBEAT_URL: ${HEARTBEAT_URL:-}
+      RETENTION_DAYS: ${RETENTION_DAYS:-90}
+    networks:
+      controlweb_proxy:
+        ipv4_address: 10.77.0.20
+      controlweb_db: {}
+      controlweb_egress:
+        gw_priority: 100
+
+  controlweb-db:
+    # postgres:16.15-alpine3.23
+    image: postgres:16.15-alpine3.23@sha256:621a761097839bdb50207afd6b87a72f38e2d718dd46c3d744828d8917c4f1e0
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+      - /run/postgresql:rw,noexec,nosuid,nodev,size=1m,uid=70,gid=70
+    # The image starts as root to prepare the data directory and then becomes the postgres user: it needs exactly these.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 100
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 1.0
+    logging: *logging
+    command: ["postgres", "-c", "shared_buffers=32MB", "-c", "max_connections=20"]
+    environment:
+      POSTGRES_DB: ${DB_NAME:-controlweb}
+      POSTGRES_USER: ${DB_USERNAME:?DB_USERNAME is required (set it in .env.prod)}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required (set it in .env.prod)}
+    volumes:
+      - controlweb-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - controlweb_db
+
+networks:
+  controlweb_proxy:
+    external: true
+    name: controlweb_proxy
+  controlweb_db:
+    name: controlweb_db
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.name: cw-db
+    ipam:
+      config:
+        - subnet: 10.77.1.0/24
+  controlweb_egress:
+    name: controlweb_egress
+    driver_opts:
+      com.docker.network.bridge.name: cw-egress
+    ipam:
+      config:
+        - subnet: 10.77.2.0/24
+
+volumes:
+  controlweb-pgdata:
+    name: controlweb_prod_pgdata

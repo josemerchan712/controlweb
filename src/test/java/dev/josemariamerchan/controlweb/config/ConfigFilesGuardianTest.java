@@ -24,7 +24,7 @@ import org.springframework.core.io.ClassPathResource;
  * Every secret reaches the application through the environment ({@code ${NAME:}} with an EMPTY default). The detector
  * itself is tested too, so this guardian cannot silently stop guarding.
  */
-class ConfigFilesGuardianTest {
+public class ConfigFilesGuardianTest {
 
 	private static final Pattern TELEGRAM_TOKEN = Pattern.compile("\\d{8,10}:[A-Za-z0-9_-]{30,}");
 	private static final Pattern JWT = Pattern.compile("eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}");
@@ -49,7 +49,7 @@ class ConfigFilesGuardianTest {
 	}
 
 	/** Why this key/value pair looks like a literal secret, or null if it does not. */
-	static String suspicion(String key, String value) {
+	public static String suspicion(String key, String value) {
 		if (value == null || value.isBlank()) {
 			return null;
 		}
@@ -111,17 +111,19 @@ class ConfigFilesGuardianTest {
 	}
 
 	@Test
-	@DisplayName(".env.example holds only empty values or placeholders for anything secret")
+	@DisplayName(".env.example and deploy/.env.prod.example hold only empty values or placeholders for anything secret")
 	void exampleFileHasOnlyPlaceholders() throws IOException {
-		for (String line : Files.readAllLines(Path.of(".env.example"))) {
-			if (line.isBlank() || line.startsWith("#") || !line.contains("=")) {
-				continue;
-			}
-			String key = line.substring(0, line.indexOf('='));
-			String value = line.substring(line.indexOf('=') + 1).strip();
-			if (SECRET_KEY.matcher(key).matches() && !HARMLESS_VALUE.matcher(value).matches()) {
-				assertThat(value.isEmpty() || ProductionSettingsValidator.isPlaceholder(value))
-						.as("%s in .env.example must be empty or an obvious placeholder", key).isTrue();
+		for (String file : List.of(".env.example", "deploy/.env.prod.example")) {
+			for (String line : Files.readAllLines(Path.of(file))) {
+				if (line.isBlank() || line.startsWith("#") || !line.contains("=")) {
+					continue;
+				}
+				String key = line.substring(0, line.indexOf('='));
+				String value = line.substring(line.indexOf('=') + 1).strip();
+				if (SECRET_KEY.matcher(key).matches() && !HARMLESS_VALUE.matcher(value).matches()) {
+					assertThat(value.isEmpty() || ProductionSettingsValidator.isPlaceholder(value))
+							.as("%s in %s must be empty or an obvious placeholder", key, file).isTrue();
+				}
 			}
 		}
 	}
