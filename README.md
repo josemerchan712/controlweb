@@ -7,8 +7,8 @@ Backend que **vigila sitios web** (disponibilidad, latencia y caducidad del cert
 endpoint público de estado pensado para enseñarlo en un portfolio.
 
 > **Estado:** fase 1 (backend, probado y ejecutable en local) terminada. Quedan el dashboard en React y el despliegue
-> (ver [Hoja de ruta](#hoja-de-ruta)). **Todavía no está preparado para desplegarse**: falta el rate limiting del login
-> (ver [Limitaciones conocidas](#limitaciones-conocidas)).
+> (ver [Hoja de ruta](#hoja-de-ruta) y el plan en [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md)). El login ya tiene rate
+> limiting; ver las [Limitaciones conocidas](#limitaciones-conocidas).
 
 ## Qué es y por qué existe
 
@@ -269,8 +269,11 @@ Dependabot actualiza Maven y las acciones cada semana.
 
 ## Limitaciones conocidas
 
-- **Rate limiting del login pendiente (obligatorio antes de desplegar).** `POST /api/auth/login` todavía no limita
-  intentos; la fase de despliegue no empieza sin esto. Por eso este repositorio no debe exponerse a Internet tal cual.
+- **El rate limiting del login puede bloquear al administrador.** `POST /api/auth/login` limita por cliente (5 fallos de
+  ráfaga y luego 20 por hora) y por cuenta (20 fallos y luego 20 por hora, exista o no el email). Un atacante con muchas IP
+  puede mantener vacío el cubo de la cuenta y bloquear el login incluso con la contraseña correcta; no es un bloqueo
+  permanente y solo afecta al login (las comprobaciones y los avisos siguen). La salida es entrar por SSH y reiniciar la
+  aplicación (el estado está en memoria). Detrás de un proxy hay que configurar `TRUSTED_PROXY_ADDRESSES`.
 - **TOCTOU / DNS rebinding.** La protección SSRF resuelve el DNS y después el `HttpClient` vuelve a resolverlo; entre
   ambos pasos un DNS malicioso podría cambiar de respuesta. Cerrarlo del todo exige fijar la IP en la conexión; para un
   panel de un solo administrador se acepta y se documenta.
@@ -282,7 +285,7 @@ Dependabot actualiza Maven y las acciones cada semana.
 ## Hoja de ruta
 
 - [x] Fase 1: backend completo, probado y documentado (esta versión).
-- [ ] **Rate limiting del login** (requisito previo al despliegue).
+- [x] **Rate limiting del login** (por cliente y por cuenta, con `Retry-After`).
 - [ ] Dockerfile y despliegue en un VPS (Caddy como proxy inverso con HTTPS).
 - [ ] Dashboard en React + Vite sobre la API privada, y página de estado pública para el portfolio.
 - [ ] Refresh tokens y más canales de aviso.

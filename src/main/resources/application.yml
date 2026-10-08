@@ -32,6 +32,21 @@ app:
   cors:
     # Comma separated exact origins, no wildcards. Empty = no cross-origin access.
     allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+  proxy:
+    # Exact IPs (no ranges, no names) of the reverse proxies whose X-Forwarded-For is believed. Empty = never read it.
+    # Production: the fixed IP of Caddy in the shared network (see docs/DESPLIEGUE.md).
+    trusted-addresses: ${TRUSTED_PROXY_ADDRESSES:}
+  login-rate-limit:
+    # POST /api/auth/login. Each limit is a token bucket: `capacity` tokens, one more every `refill`.
+    ip-attempts: 10            # attempts of any kind one client may make in a burst ...
+    ip-attempts-refill: 6s     # ... then 10 per minute
+    ip-failures: 5             # failed logins of one client in a burst ...
+    ip-failures-refill: 3m     # ... then 20 per hour
+    account-failures: 20       # failed logins against one email (existing or not), from all clients together ...
+    account-failures-refill: 3m
+    global-attempts: 60        # attempts the whole server accepts in a burst ...
+    global-attempts-refill: 1s # ... then 60 per minute
+    max-keys: 10000            # clients / accounts remembered (least recently used are forgotten)
   checker:
     # SSRF guard. Keep false everywhere except local development and tests (see application-dev.yml).
     allow-private-hosts: false

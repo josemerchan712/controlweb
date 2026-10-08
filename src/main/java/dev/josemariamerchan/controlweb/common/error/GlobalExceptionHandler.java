@@ -18,6 +18,7 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
 
 import dev.josemariamerchan.controlweb.alert.service.AlertDeliveryException;
 import dev.josemariamerchan.controlweb.alert.service.AlertRateLimitedException;
+import dev.josemariamerchan.controlweb.auth.ratelimit.LoginRateLimitedException;
 import dev.josemariamerchan.controlweb.auth.service.InvalidCredentialsException;
 import dev.josemariamerchan.controlweb.common.net.UnsafeHostException;
 import dev.josemariamerchan.controlweb.common.text.MessageSanitizer;
@@ -55,6 +56,13 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 	@ExceptionHandler(InvalidCredentialsException.class)
 	ProblemDetail handleInvalidCredentials(InvalidCredentialsException ex) {
 		return ProblemDetail.forStatusAndDetail(HttpStatus.UNAUTHORIZED, ex.getMessage());
+	}
+
+	@ExceptionHandler(LoginRateLimitedException.class)
+	ResponseEntity<ProblemDetail> handleLoginRateLimited(LoginRateLimitedException ex) {
+		return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+				.header(HttpHeaders.RETRY_AFTER, String.valueOf(ex.getRetryAfterSeconds()))
+				.body(ProblemDetail.forStatusAndDetail(HttpStatus.TOO_MANY_REQUESTS, ex.getMessage()));
 	}
 
 	@ExceptionHandler({ SiteNotFoundException.class, IncidentNotFoundException.class })

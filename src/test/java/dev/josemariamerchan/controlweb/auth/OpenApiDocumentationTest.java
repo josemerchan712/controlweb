@@ -108,7 +108,7 @@ class OpenApiDocumentationTest {
 		Map<String, Object> document = document();
 
 		assertThat(JsonPath.<Map<String, Object>>read(document, "$.paths['/api/auth/login'].post.responses"))
-				.containsKey("401");
+				.containsKeys("401", "429");
 		assertThat(JsonPath.<Map<String, Object>>read(document, "$.paths['/api/public/status'].get.responses"))
 				.doesNotContainKey("401");
 	}

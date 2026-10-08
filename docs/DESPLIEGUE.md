@@ -71,6 +71,15 @@ Lo que sí es cierto:
 - Se acepta porque es un panel de un solo administrador y la disponibilidad del login es menos importante que impedir
   el acierto de la contraseña.
 
+**Implementación de C1 (desviaciones y valores finales):**
+- **Cubo por cuenta: 20 fichas y +1 cada 3 min** (decisión del usuario; el borrador decía 10 y +1 cada 6 min). No evita el bloqueo
+  por muchas IP, solo da más holgura al administrador y sigue haciendo inalcanzable la fuerza bruta contra una contraseña aleatoria.
+- **Token bucket propio en lugar de Bucket4j:** unas 100 líneas, todo el tiempo sale del `Clock` y no hay dependencia nueva que
+  mantener. La API es la misma (`tryConsume`, `peek`), así que sustituirlo por Bucket4j sería local a `TokenBuckets`.
+- Dos puertas: `LoginRateLimitFilter` (antes de Spring Security y de leer el cuerpo) y `AuthController` (cuenta, antes de BCrypt).
+- Memoria acotada con un LRU de `max-keys` (10.000) claves por cubo. Efecto a conocer: quien cree 10.000 claves más recientes
+  puede "olvidar" un cubo concreto; el límite por IP (y el global de 60 intentos/min) lo hace costoso.
+
 **IP real detrás de Caddy:** `ClientIpResolver` propio con `app.proxy.trusted-addresses` (IP exactas, sin rangos ni nombres;
 arranque fail-fast si no son literales; vacío por defecto = nunca se confía en `X-Forwarded-For`). En producción:
 `10.77.0.10`, la IP fija de Caddy en `controlweb_proxy`. Solo si el peer TCP es esa IP se toma la entrada **más a la
@@ -293,7 +302,7 @@ opcional. UptimeRobot Free: 50 monitores a 5 min, uso no comercial y Telegram pr
 | Paso | Contenido | Comprobación | Deshacer |
 |---|---|---|---|
 | **C0 [CW]** | Este documento | Revisión | revert |
-| **C1 [CW]** | Rate limiting + `ClientIpResolver` | Tests del punto 1 + mutación; `verify` en verde | revert |
+| **C1 [CW]** ✅ | Rate limiting + `ClientIpResolver` | Hecho: ver «Implementación de C1» | revert |
 | **C2 [CW]** | Tests SSRF de límites | Tests | revert |
 | **C3 [CW]** | Heartbeat opcional (`app.heartbeat.url`, vacío = apagado) | Test con servidor local; la URL nunca en logs | revert |
 | **C4 [CW]** *(si S0 da 403)* | Mensaje "desafío de Cloudflare" | Tests | revert |

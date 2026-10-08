@@ -74,6 +74,7 @@ public class OpenApiConfig {
 		}
 		if ("/api/auth/login".equals(path)) {
 			problem(operation, "401", "Wrong email or password");
+			problem(operation, "429", "Too many login attempts (see Retry-After)");
 		}
 		if (path.contains("{")) {
 			problem(operation, "404", "The site or incident does not exist");

@@ -11,6 +11,17 @@ app:
   scheduler:
     # No background cycle during tests; they call CheckRunner.runCycle() themselves.
     enabled: false
+  login-rate-limit:
+    # The suite logs in constantly from one address: effectively unlimited here. The real limits are exercised in
+    # LoginRateLimitIntegrationTest, which sets the production values explicitly.
+    ip-attempts: 100000
+    ip-attempts-refill: 1ms
+    ip-failures: 100000
+    ip-failures-refill: 1ms
+    account-failures: 100000
+    account-failures-refill: 1ms
+    global-attempts: 100000
+    global-attempts-refill: 1ms
   retention:
     # No nightly purge during tests; they call CheckRetentionService themselves.
     enabled: false

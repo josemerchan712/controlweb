@@ -335,8 +335,27 @@ tienen efectos secundarios (un test comprueba que solo se emiten `SELECT` y que 
   usan `josemerchan712/controlweb` (el remoto actual).
 - **Decisión del usuario**: el repositorio NO se hace público y NO se añade licencia hasta que él lo decida.
 
+## Rate limiting del login (fase 2, paso C1)
+`POST /api/auth/login` está limitado con **token buckets propios** (`auth/ratelimit`, sin dependencias: ~100 líneas, todo el
+tiempo sale del `Clock`; se descartó Bucket4j porque no aportaba nada que justificara una dependencia). Cuatro cubos
+(`app.login-rate-limit.*`, valores en `application.yml`): global 60/min; cliente 10 intentos/min; cliente 5 fallos de ráfaga
+y luego 20/h; **cuenta 20 fallos y luego 20/h** (email normalizado, exista o no: un 429 no revela qué emails son reales).
+- Dos puertas: `LoginRateLimitFilter` (antes de Spring Security y de leer el cuerpo: cuentan hasta las peticiones rotas) y
+  `AuthController` (cuenta, ANTES de BCrypt; los fallos se registran después). Una petición rechazada no gasta CPU. Un login
+  correcto no gasta fichas de fallos. 429 `ProblemDetail` con `Retry-After`, mismo mensaje para cualquier cubo.
+- IP real: `ClientIpResolver` solo cree en `X-Forwarded-For` si el peer TCP es EXACTAMENTE una IP de `app.proxy.trusted-addresses`
+  (`TRUSTED_PROXY_ADDRESSES`; rangos, nombres y comodines impiden arrancar); entonces usa la entrada MÁS A LA DERECHA.
+  IPv6 se agrupa por /64. Vacío (por defecto) = nunca se lee la cabecera. En producción: la IP fija de Caddy (docs/DESPLIEGUE.md).
+- En los tests el perfil `test` pone límites enormes (la suite hace login constantemente); `LoginRateLimitIntegrationTest`
+  fija los de producción. Mutaciones verificadas: quitar la comprobación de cuenta previa a BCrypt, creer siempre
+  `X-Forwarded-For`, usar la entrada izquierda y gastar fichas en logins correctos hacen fallar tests.
+- **Limitación conocida (documentada en docs/DESPLIEGUE.md):** un atacante con muchas IP puede mantener vacío el cubo de una
+  cuenta y bloquear el login aunque la contraseña sea correcta. Salida: SSH y reiniciar la app (el estado está en memoria).
+  También se puede "olvidar" un cubo creando `max-keys` (10.000) claves más recientes: lo frena el límite por IP.
+
 ## Fuera de la fase 1 (pendiente)
 Frontend React + Vite, Dockerfile y despliegue en Hetzner, refresh tokens. Licencia y visibilidad pública del repositorio:
 decisión del usuario, pendiente.
 
-> **OBLIGATORIO antes de desplegar:** el rate limiting del login (`POST /api/auth/login`).
+> Rate limiting del login (`POST /api/auth/login`): **implementado en el paso C1 de la fase 2**; antes de desplegar hay que
+> configurar `TRUSTED_PROXY_ADDRESSES` con la IP fija de Caddy (ver docs/DESPLIEGUE.md).
