@@ -79,6 +79,12 @@ public class ProductionSettingsValidator implements EnvironmentPostProcessor, Or
 		secret(problems, "ADMIN_PASSWORD", environment.getProperty("app.admin.password"), false);
 		secret(problems, "DB_PASSWORD", environment.getProperty("spring.datasource.password"), false);
 
+		List<String> exposed = list(binder, "management.endpoints.web.exposure.include");
+		if (exposed.size() != 1 || !exposed.get(0).equalsIgnoreCase("health")) {
+			problems.add("management.endpoints.web.exposure.include must be exactly 'health': any other actuator endpoint "
+					+ "(or '*') would expose internals.");
+		}
+
 		String heartbeat = environment.getProperty("app.heartbeat.url", "").strip();
 		if (!heartbeat.isEmpty() && !heartbeat.toLowerCase(Locale.ROOT).startsWith("https://")) {
 			problems.add("HEARTBEAT_URL is set but is not an https URL.");

@@ -318,6 +318,7 @@ nunca por valor** (varias son secretos):
 6. `JWT_SECRET`, `ADMIN_PASSWORD` o `DB_PASSWORD` vacíos o iguales a un valor de ejemplo (lista de marcadores; un test comprueba
    que todo valor de `.env.example` está en ella). Un `JWT_SECRET` de un solo byte repetido (32 ceros) también se rechaza.
 7. `HEARTBEAT_URL` definida pero que no sea https.
+8. `management.endpoints.web.exposure.include` distinto de exactamente `health` (también si falta o es `*`).
 
 `application-prod.yml` no lleva secretos: desactiva Swagger/api-docs, expone solo `/actuator/health` sin detalles ni sondas,
 fija el pool a 5 conexiones, `*:future` en Flyway, errores sin mensaje ni traza, apagado ordenado, retención a las 04:45 y

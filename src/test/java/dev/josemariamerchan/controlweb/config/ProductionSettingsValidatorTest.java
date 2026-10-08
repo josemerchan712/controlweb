@@ -54,6 +54,7 @@ class ProductionSettingsValidatorTest {
 		properties.put("app.admin.password", GOOD_ADMIN_PASSWORD);
 		properties.put("spring.datasource.password", GOOD_DB_PASSWORD);
 		properties.put("app.heartbeat.url", HEARTBEAT);
+		properties.put("management.endpoints.web.exposure.include", "health");
 		return properties;
 	}
 
@@ -354,6 +355,35 @@ class ProductionSettingsValidatorTest {
 	void blankHeartbeatIsOff() {
 		MockEnvironment environment = valid();
 		environment.setProperty("app.heartbeat.url", "   ");
+
+		assertThatCode(() -> check(environment)).doesNotThrowAnyException();
+	}
+
+	// ---- 8. actuator exposure ----
+
+	@ParameterizedTest
+	@ValueSource(strings = { "*", "health,info", "health, env", "env", "info", "metrics,health", "beans", "", "  ", "health,health,loggers" })
+	@DisplayName("management.endpoints.web.exposure.include must be exactly 'health': anything else exposes internals")
+	void actuatorExposureMustBeExactlyHealth(String include) {
+		MockEnvironment environment = valid();
+		environment.setProperty("management.endpoints.web.exposure.include", include);
+
+		assertThat(failureOf(environment)).contains("management.endpoints.web.exposure.include");
+	}
+
+	@Test
+	@DisplayName("actuator exposure not set at all is refused too: production states it explicitly")
+	void actuatorExposureMissing() {
+		assertThat(failureOf(validWithout("management.endpoints.web.exposure.include")))
+				.contains("management.endpoints.web.exposure.include");
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = { "health", " health ", "HEALTH" })
+	@DisplayName("'health' (any case, spaces ignored) is the one accepted value")
+	void actuatorExposureHealthIsAccepted(String include) {
+		MockEnvironment environment = valid();
+		environment.setProperty("management.endpoints.web.exposure.include", include);
 
 		assertThatCode(() -> check(environment)).doesNotThrowAnyException();
 	}
