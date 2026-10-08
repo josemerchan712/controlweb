@@ -303,12 +303,20 @@ opcional. UptimeRobot Free: 50 monitores a 5 min, uso no comercial y Telegram pr
 |---|---|---|---|
 | **C0 [CW]** | Este documento | Revisión | revert |
 | **C1 [CW]** ✅ | Rate limiting + `ClientIpResolver` | Hecho: ver «Implementación de C1» | revert |
-| **C2 [CW]** | Tests SSRF de límites | Tests | revert |
+| **C2 [CW]** ✅ | Tests SSRF de límites (`HostSafetyBoundaryTest`) | Hecho: 47 casos, con mutaciones comprobadas | revert |
 | **C3 [CW]** | Heartbeat opcional (`app.heartbeat.url`, vacío = apagado) | Test con servidor local; la URL nunca en logs | revert |
 | **C4 [CW]** *(si S0 da 403)* | Mensaje "desafío de Cloudflare" | Tests | revert |
-| **C5 [CW]** | `application-prod.yml`, protección `prod`, Flyway `*:future`, cron de retención | Test del perfil | revert |
+| **C5 [CW]** | `application-prod.yml`, protección `prod`, Flyway `*:future`, cron de retención | Test del perfil (ver requisitos) | revert |
 | **C6 [CW]** | Dockerfile, `compose.prod.yml`, job de CI de la imagen | ⏸ En local con límite de 512 MiB; anotar RSS tras 10 min | revert |
 | **C7 [CW]** | `deploy/` completo + shellcheck en CI | `bash -n`, shellcheck, revisión | revert |
+
+**Requisitos de C5 (añadidos al aprobar C1):**
+- El perfil `prod` **debe negarse a arrancar si `app.proxy.trusted-addresses` está vacío**, con test. Sin esa IP todos los
+  clientes comparten la IP de Caddy (el peer TCP) y 5 fallos de login bloquearían el acceso de todo el mundo.
+- Además, `allow-private-hosts=true` sigue impidiendo arrancar con el perfil `prod`.
+- Pendiente de decidir en C5 (hallazgo de C2): el firewall de salida bloquea también rangos de documentación y benchmarking
+  (192.0.0.0/24, 192.0.2.0/24, 198.18.0.0/15, 198.51.100.0/24, 203.0.113.0/24) que `HostSafetyValidator` hoy permite. No es un
+  riesgo (el firewall es la capa extra), pero si se quiere coherencia hay que añadirlos al validador con sus tests de borde.
 
 ### Fase B: servidor
 

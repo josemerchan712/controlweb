@@ -335,6 +335,13 @@ tienen efectos secundarios (un test comprueba que solo se emiten `SELECT` y que 
   usan `josemerchan712/controlweb` (el remoto actual).
 - **Decisión del usuario**: el repositorio NO se hace público y NO se añade licencia hasta que él lo decida.
 
+## Fase 2: despliegue en producción
+El plan está en `docs/DESPLIEGUE.md` (un paso = un commit; se para tras cada uno). **Ese documento contiene detalles de
+infraestructura** (esquema de redes y subredes, rutas del servidor, nombres de dominio, estructura de firewall y de copias);
+**hay que revisarlo, y quitar o generalizar lo que sobre, antes de hacer público el repositorio.** La IP pública del VPS no
+aparece (se escribe `<IP_PUBLICA_VPS>`), pero el resto sí. Requisito anotado para C5: el perfil `prod` no debe arrancar con
+`app.proxy.trusted-addresses` vacío.
+
 ## Rate limiting del login (fase 2, paso C1)
 `POST /api/auth/login` está limitado con **token buckets propios** (`auth/ratelimit`, sin dependencias: ~100 líneas, todo el
 tiempo sale del `Clock`; se descartó Bucket4j porque no aportaba nada que justificara una dependencia). Cuatro cubos
