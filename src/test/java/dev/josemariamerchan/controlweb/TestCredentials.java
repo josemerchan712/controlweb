@@ -15,10 +15,27 @@ public final class TestCredentials {
 
 	public static final String JWT_SECRET = randomBase64(32);
 	public static final String OTHER_JWT_SECRET = randomBase64(32);
+	/** A random, well-formed (but fake) Telegram bot token: 9 digits, a colon and 35 URL-safe characters. */
+	public static final String TELEGRAM_TOKEN = "123456789:" + randomBase64(27).replace('+', '-').replace('/', '_').replace("=", "");
+	/** The secret half of the token (after the colon): it is what really must never leak, in any encoding. */
+	public static final String TELEGRAM_TOKEN_SECRET = TELEGRAM_TOKEN.substring(TELEGRAM_TOKEN.indexOf(':') + 1);
 	public static final String ADMIN_EMAIL = "admin@test.local";
 	public static final String ADMIN_PASSWORD = "pw-" + randomBase64(18);
 
 	private TestCredentials() {
+	}
+
+	/**
+	 * Every form the bot token can take in a log line or message: as is, with the colon percent-encoded (what a
+	 * URL shows, e.g. in "I/O error on POST request for ..."), and just its secret half.
+	 */
+	public static java.util.List<String> telegramTokenForms() {
+		return java.util.List.of(TELEGRAM_TOKEN, TELEGRAM_TOKEN.replace(":", "%3A"), TELEGRAM_TOKEN.replace(":", "%3a"),
+				TELEGRAM_TOKEN_SECRET);
+	}
+
+	public static boolean leaksTelegramToken(String text) {
+		return telegramTokenForms().stream().anyMatch(text::contains);
 	}
 
 	public static String randomBase64(int bytes) {

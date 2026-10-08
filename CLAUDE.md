@@ -43,7 +43,8 @@ docker compose down                # parar la base de datos
 - Paso 3 (seguridad JWT): hecho.
 - Paso 4 (checker HTTP + SSL): hecho.
 - Paso 5 (scheduler + comprobación manual): hecho.
-- Paso 6 (motor de reglas, incidencias y eventos + API de reglas): hecho. Siguiente: paso 7 (alertas por Telegram).
+- Paso 6 (motor de reglas, incidencias y eventos + API de reglas): hecho.
+- Paso 7 (alertas por Telegram): hecho. Siguiente: paso 8 (API de lectura: estado, histórico, estadísticas, incidencias).
 
 ## CRUD de sitios y SSRF (paso 2)
 - `SiteUrlNormalizer` canonicaliza la URL antes de guardar (esquema y host en minúsculas, sin punto final en el host,
@@ -107,6 +108,43 @@ guardarlo también en checks fallidos por HTTP, p. ej. un 503 con certificado v�
 - **Tests** sin WireMock ni archivos de claves: servidores `com.sun.net.httpserver` (HTTP/HTTPS) y certificados EC generados
   en memoria con BouncyCastle (solo `test`): CA de confianza, hoja válida, caducada, aún no válida, host incorrecto y CA
   desconocida (`TestServer`, `TestPki`).
+
+## Alertas por Telegram (paso 7)
+- **`Notifier`** (interfaz, `send(html)` NUNCA lanza; devuelve `SendResult` SENT / NOT_CONFIGURED / FAILED con un detalle seguro).
+  `NotifierConfig` elige: `TelegramNotifier` solo si `TELEGRAM_BOT_TOKEN` Y `TELEGRAM_CHAT_ID` existen y tienen forma válida;
+  si no, `LoggingNotifier`. Con solo una de las dos (o formato inválido) avisa al arrancar con un WARN claro que nombra las
+  variables y NUNCA imprime valores. Con ninguna, un INFO.
+- **El token NUNCA debe aparecer en logs, excepciones ni trazas.** Telegram exige el token en la ruta de la URL, así que:
+  1) `RestClient` solo conoce `/sendMessage`; un interceptor (`BotTokenPathInterceptor`) antepone `/bot<token>` en el último
+  momento, así los logs/observaciones/mensajes de excepción de Spring (`I/O error on POST request for "<uri>"`) no lo
+  contienen; 2) `TelegramNotifier` jamás registra el mensaje de una excepción, solo clasificaciones propias; 3)
+  `MessageSanitizer` enmascara `bot<id>:<secreto>` (también con `%3A`) en todo lo que pasa por él (`SendResult`, `details`,
+  logs); 4) `TelegramProperties.toString()` oculta token y chat id; 5) la URL base debe ser https (http solo en loopback).
+  Tests: `TelegramNotifierNetworkTest` provoca fallos reales (conexión rechazada, timeout, 401, 503) y revisa TODOS los
+  loggers a nivel TRACE buscando el token en cualquiera de sus formas (literal, `%3A` y solo la parte secreta). Mutaciones
+  verificadas: loguear el token a propósito y una implementación "ingenua" (token en la URI + log de `ex.getMessage()`)
+  hacen fallar los tests. OJO: el servidor falso del JDK (`com.sun.net.httpserver`) registra la línea de petición con el
+  token en la misma JVM; esos loggers se excluyen en el test porque son del servidor, no del cliente.
+- **Envío asíncrono**: `IncidentAlertListener` (`@TransactionalEventListener(AFTER_COMMIT)`) solo da formato y encola en
+  `AlertDispatcher`: un único virtual thread con cola acotada (`app.alerts.queue-capacity`, 100), así se conserva el orden
+  (abierta antes que resuelta), nada bloquea al check ni al scheduler y, si Telegram está caído mucho tiempo, los avisos
+  nuevos se descartan con un WARN en vez de acumularse. Todo fallo se captura. Al parar la app se vacía la cola
+  (`app.alerts.shutdown-timeout`).
+- **Timeouts y reintentos** (`app.telegram.*`): conexión 3 s, lectura 5 s, máx. 2 reintentos con 500 ms de pausa en errores
+  de red y 5xx. 429: se respeta `retry_after` (cuerpo o cabecera `Retry-After`) solo si es <= `max-retry-after` (10 s); si no,
+  el aviso se descarta y se registra. Cualquier otro 4xx (token/chat id inválidos) no se reintenta: un único WARN con la
+  explicación de Telegram. Una redirección no es éxito y no se sigue. Sin reintentos infinitos.
+- **Formato** (`AlertMessageFormatter`): HTML en español. El nombre del sitio y el detalle se ESCAPAN SIEMPRE (`& < >`);
+  nunca se incluye la URL del sitio (las URL dentro del detalle se sustituyen por `[URL omitida]`); la resolución muestra la
+  duración legible (`12 min`, `1 h 5 min`, `1 d 3 h`); máx. 4096 caracteres, recortando el texto SIN escapar para no partir
+  una entidad. El detalle viene del motor de reglas y está en inglés técnico.
+- **`POST /api/alerts/test`** (JWT, cubierto por el guardián): envía un mensaje de prueba de forma síncrona por el notifier.
+  200 si se envió; 503 `ProblemDetail` sin datos sensibles si no está configurado o falla; 429 con `Retry-After` si se llama
+  más de una vez cada 10 s (`app.alerts.test-interval`; todos los intentos cuentan; límite global en memoria, válido para una
+  sola instancia).
+- Tests de integración: `RecordingNotifier` (primario en `TestcontainersConfiguration`) sustituye a Telegram; el ciclo
+  completo (incidencia abierta y cerrada) produce exactamente un aviso de apertura y uno de cierre, y un notifier que falla
+  o lanza no afecta a checks ni incidencias.
 
 ## Reglas, incidencias y eventos (paso 6)
 - **`RuleEngine`** (`incident/rules`) es Java puro: sin Spring, sin datos, sin reloj, sin estado (un test lo verifica por
@@ -193,6 +231,10 @@ guardarlo también en checks fallidos por HTTP, p. ej. un 503 con certificado v�
   `ApiSecurityGuardTest` recorre todos los endpoints `/api/**` y falla si alguno responde algo distinto de 401 sin token
   (salvo la lista explícita de públicos). Añadir un endpoint público es una decisión consciente: tocar `SecurityConfig`
   y la lista `isPublic` de ese test.
+- **Los tests son herméticos respecto a tu `.env`**: `TestSecretsEnvironmentPostProcessor` elimina la fuente cargada desde
+  `.env` en TODOS los tests (también cuando se arranca sin secretos con `test.secrets=false`), así un `.env` con secretos o un
+  token real de Telegram nunca llega a un test (`TestIsolationTest`). Las pruebas con Telegram usan siempre un token falso
+  aleatorio y un servidor local o `MockRestServiceServer`.
 - Los tests de slice `@WebMvcTest` usan `@AutoConfigureMockMvc(addFilters = false)`; la seguridad se prueba aparte.
 
 ## Fuera de la fase 1

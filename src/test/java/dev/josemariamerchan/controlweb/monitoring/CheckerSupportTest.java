@@ -52,6 +52,24 @@ class CheckerSupportTest {
 	}
 
 	@Test
+	@DisplayName("a Telegram bot token is masked wherever it shows up (URL path, bare, upper case)")
+	void masksTelegramTokens() {
+		String token = "123456789:AAFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+
+		assertThat(MessageSanitizer.sanitize("POST https://api.telegram.org/bot" + token + "/sendMessage failed"))
+				.isEqualTo("POST https://api.telegram.org/bot[redacted]/sendMessage failed");
+		assertThat(MessageSanitizer.sanitize("url=/BOT" + token + "/getMe")).doesNotContain(token).contains("bot[redacted]");
+		assertThat(MessageSanitizer.sanitize("a normal message about bots: 42")).isEqualTo("a normal message about bots: 42");
+		// the percent-encoded form that a URL shows
+		assertThat(MessageSanitizer.sanitize("I/O error on POST request for \"http://h/bot123456789%3AAAFxxxxxxxxxxxxxxxxxxxxxxxxx/sendMessage\": null"))
+				.isEqualTo("I/O error on POST request for \"http://h/bot[redacted]/sendMessage\": null");
+		// token AND query in the same URL: both go, and sanitizing twice changes nothing
+		String once = MessageSanitizer.sanitize("failed https://api.telegram.org/bot" + token + "/sendMessage?x=1&y=2");
+		assertThat(once).isEqualTo("failed https://api.telegram.org/bot[redacted]/sendMessage");
+		assertThat(MessageSanitizer.sanitize(once)).isEqualTo(once);
+	}
+
+	@Test
 	@DisplayName("line breaks, tabs and control characters are flattened to single spaces")
 	void flattensWhitespace() {
 		assertThat(MessageSanitizer.sanitize("line one\r\n\tline two\u0000\u0007 end  ")).isEqualTo("line one line two end");

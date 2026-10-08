@@ -14,6 +14,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
+import dev.josemariamerchan.controlweb.alert.service.AlertDeliveryException;
+import dev.josemariamerchan.controlweb.alert.service.AlertRateLimitedException;
 import dev.josemariamerchan.controlweb.auth.service.InvalidCredentialsException;
 import dev.josemariamerchan.controlweb.common.net.UnsafeHostException;
 import dev.josemariamerchan.controlweb.incident.service.InvalidRuleException;
@@ -50,6 +52,18 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 	@ExceptionHandler(SiteNotFoundException.class)
 	ProblemDetail handleNotFound(SiteNotFoundException ex) {
 		return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
+	}
+
+	@ExceptionHandler(AlertDeliveryException.class)
+	ProblemDetail handleAlertDelivery(AlertDeliveryException ex) {
+		return ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage());
+	}
+
+	@ExceptionHandler(AlertRateLimitedException.class)
+	ResponseEntity<ProblemDetail> handleAlertRateLimited(AlertRateLimitedException ex) {
+		return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+				.header(HttpHeaders.RETRY_AFTER, String.valueOf(ex.getRetryAfterSeconds()))
+				.body(ProblemDetail.forStatusAndDetail(HttpStatus.TOO_MANY_REQUESTS, ex.getMessage()));
 	}
 
 	@ExceptionHandler(CheckInProgressException.class)

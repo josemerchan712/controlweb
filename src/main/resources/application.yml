@@ -49,6 +49,21 @@ app:
     # HIGH_LATENCY opens only when this many CONSECUTIVE successful checks all exceed the threshold
     # (so a single spike never opens an incident).
     latency-samples: 3
+  telegram:
+    # BOTH are required to send to Telegram; with only one (or none) alerts are just logged.
+    # The token is a secret: only from the environment, never logged.
+    bot-token: ${TELEGRAM_BOT_TOKEN:}
+    chat-id: ${TELEGRAM_CHAT_ID:}
+    api-base-url: https://api.telegram.org
+    connect-timeout: 3s
+    read-timeout: 5s
+    max-retries: 2          # after the first attempt: network errors, 5xx, and a short 429
+    retry-delay: 500ms
+    max-retry-after: 10s    # a 429 asking to wait longer than this is dropped, not retried
+  alerts:
+    queue-capacity: 100     # alerts waiting to be sent; beyond that they are dropped, never blocking a check
+    shutdown-timeout: 10s   # let queued alerts go out when the application stops
+    test-interval: 10s      # minimum time between two POST /api/alerts/test
   # Thresholds of the alert rules created for every new site.
   alert-defaults:
     down-consecutive-failures: 2

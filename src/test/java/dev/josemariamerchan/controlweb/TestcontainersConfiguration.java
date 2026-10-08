@@ -29,6 +29,13 @@ public class TestcontainersConfiguration {
 		return POSTGRES;
 	}
 
+	/** Alerts never leave the machine in tests: this primary notifier records them instead. */
+	@Bean
+	@org.springframework.context.annotation.Primary
+	RecordingNotifier recordingNotifier() {
+		return new RecordingNotifier();
+	}
+
 	/** Present in every test context that imports this configuration, so no test needs a different context to see events. */
 	@Bean
 	IncidentEventRecorder incidentEventRecorder() {
