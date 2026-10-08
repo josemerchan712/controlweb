@@ -97,6 +97,13 @@
 			<scope>test</scope>
 		</dependency>
 		<dependency>
+			<!-- Test only: generates throw-away certificates (CA, expired, wrong host...) in memory. -->
+			<groupId>org.bouncycastle</groupId>
+			<artifactId>bcpkix-jdk18on</artifactId>
+			<version>1.86</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
 			<groupId>org.testcontainers</groupId>
 			<artifactId>testcontainers-junit-jupiter</artifactId>
 			<scope>test</scope>

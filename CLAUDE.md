@@ -40,7 +40,8 @@ docker compose down                # parar la base de datos
 - Paso 0 (scaffold): hecho.
 - Paso 1 (esquema Flyway V1 + entidades + tests de repositorio): hecho.
 - Paso 2 (CRUD de sitios + protección SSRF): hecho.
-- Paso 3 (seguridad JWT): hecho. Siguiente: paso 4 (checker HTTP + SSL, con re-validación SSRF por petición y salto).
+- Paso 3 (seguridad JWT): hecho.
+- Paso 4 (checker HTTP + SSL): hecho. Siguiente: paso 5 (scheduler que ejecuta el checker y guarda los `Check`).
 
 ## CRUD de sitios y SSRF (paso 2)
 - `SiteUrlNormalizer` canonicaliza la URL antes de guardar (esquema y host en minúsculas, sin punto final en el host,
@@ -69,6 +70,41 @@ Tablas `users`, `sites`, `checks`, `alert_rules`, `incidents`. Detalles que impo
 - Borrar un sitio borra en cascada (a nivel de BD) sus checks, reglas e incidencias.
 - Las entidades no tienen setters públicos ni usan `Clock` internamente: reciben el `Instant` desde el servicio.
 - Los tests de repositorio usan `@PostgresDataJpaTest` (PostgreSQL real con Flyway, no H2) para poder probar constraints.
+
+## Checker HTTP + SSL (paso 4)
+`HttpSiteChecker.check(url)` devuelve un `CheckResult` (up, statusCode, latencyMs, errorMessage, certExpiresAt); **no lanza
+nunca**: DNS, timeout, conexión rechazada, TLS, interrupción (se conserva el flag) o un bug se convierten en un resultado
+fallido. El paso 5 debe mapear `CheckResult` → entidad `Check` (hoy `Check.down(...)` no admite `cert_expires_at`; hay que
+guardarlo también en checks fallidos por HTTP, p. ej. un 503 con certificado válido).
+- **Cliente**: un único `HttpClient` (bean en `HttpClientConfig`), HTTP/1.1, `Redirect.NEVER`. Propiedades en
+  `app.checker.*`: `connect-timeout` 5 s (conexión + handshake TLS), `request-timeout` 10 s (estado + cabeceras de CADA
+  petición/salto), `max-redirects` 5, `user-agent` `ControlWeb/1.0`.
+- **GET, no HEAD** (algunos servidores rechazan HEAD). Resultado `up` = estado final < 400 (un 401/403/404 cuenta como caído:
+  apunta el sitio a una URL pública). La latencia es hasta recibir las cabeceras de la respuesta final, sumando los saltos.
+- **El cuerpo no se descarga**: se usa `BodyHandlers.ofInputStream()` y se cierra el stream en cuanto llegan las cabeceras.
+  `BodyHandlers.discarding()` NO sirve para esto: descarta los bytes pero los sigue leyendo del socket (un sitio que sirve
+  un cuerpo interminable mantenía el check hasta el timeout y lo daba por caído; hay un test que lo demuestra).
+- **Redirecciones a mano** (301/302/303/307/308 con `Location`, relativas resueltas): máximo 5, detección de bucle y de
+  esquemas no http(s) o credenciales en el destino. Cada salto es una petición nueva que solo lleva `User-Agent` y `Accept`
+  (no hay `CookieHandler`, nunca se envía `Authorization`/`Cookie`/`Referer`/`Origin`).
+- **SSRF**: `HostSafetyValidator.assertSafe` se ejecuta antes de la primera petición y de CADA salto; si falla, el check se
+  guarda como fallido con `Blocked: private address` y no se abre ninguna conexión. Hay tests para redirección a host
+  privado, a `169.254.169.254` y para el cambio de DNS de público a privado entre dos checks.
+- **Limitación conocida (TOCTOU / DNS rebinding)**: el guard resuelve el DNS y luego el `HttpClient` vuelve a resolverlo al
+  conectar. Si un atacante controla el DNS del sitio, puede devolver una IP pública al guard y una privada al conectar
+  (ventana de milisegundos). Re-validar en cada check y salto la reduce pero no la elimina. Cerrarla del todo exigiría
+  conectar a la IP ya validada (fijar la IP resuelta en la conexión, manteniendo SNI y verificación de host) o aislar la red
+  del proceso con un firewall de salida; queda fuera del MVP. **Antes de desplegar, bloquear en el firewall del servidor las
+  conexiones salientes del contenedor hacia rangos privados/metadatos es la defensa en profundidad recomendada.**
+- **Certificados**: si el handshake funciona se guarda `certExpiresAt` (el `notAfter` del certificado hoja, también si el
+  sitio responde 5xx). Si falla, el check es fallido con `SSL error: the certificate has expired | is not valid yet | does
+  not match the host name | is not trusted | TLS handshake failed`, sin stacktrace ni nombres de clase.
+- **Higiene de mensajes y logs**: `error_message` ≤ 500 caracteres y sin query string, fragmento ni credenciales de URL
+  (`MessageSanitizer`, aplicado en el constructor de `CheckResult`). Los logs solo llevan `scheme://host[:puerto]/ruta`,
+  nunca la query, ni la traza de excepciones (en el `catch` final solo se registra el nombre de la clase).
+- **Tests** sin WireMock ni archivos de claves: servidores `com.sun.net.httpserver` (HTTP/HTTPS) y certificados EC generados
+  en memoria con BouncyCastle (solo `test`): CA de confianza, hoja válida, caducada, aún no válida, host incorrecto y CA
+  desconocida (`TestServer`, `TestPki`).
 
 ## Seguridad (paso 3)
 - **Denegar por defecto**: `SecurityConfig` exige JWT en todo salvo `POST /api/auth/login`, `/api/public/**` y

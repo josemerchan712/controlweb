@@ -29,6 +29,10 @@ app:
   checker:
     # SSRF guard. Keep false everywhere except local development and tests (see application-dev.yml).
     allow-private-hosts: false
+    connect-timeout: 5s   # TCP connection + TLS handshake
+    request-timeout: 10s  # status + headers of one request (every redirect hop is another request)
+    max-redirects: 5
+    user-agent: ControlWeb/1.0
   # Thresholds of the alert rules created for every new site.
   alert-defaults:
     down-consecutive-failures: 2
