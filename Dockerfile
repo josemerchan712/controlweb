@@ -9,7 +9,7 @@
 
 # ---------------------------------------------------------------------------------------------------------------- build
 # eclipse-temurin:21.0.12_8-jdk-alpine-3.23
-FROM eclipse-temurin:21.0.12_8-jdk-alpine-3.23@sha256:52ca1500049e2e2e7cee85fc4cd8689108792dc2bde18161b7f9236f609f0dea AS build
+FROM eclipse-temurin:21-jdk-alpine-3.24@sha256:0bfc69a4758a86710e5c474032d28400a8bd00874766f9e8b1642ac2fd293159 AS build
 
 WORKDIR /build
 
@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/root/.m2 MAVEN_OPTS="-Xmx512m" ./mvnw -B -ntp -Dm
 
 # ------------------------------------------------------------------------------------------------------------- runtime
 # eclipse-temurin:21.0.12_8-jre-alpine-3.23
-FROM eclipse-temurin:21.0.12_8-jre-alpine-3.23@sha256:1f165f3a75613b80cc803a2ccc4d865e5c8b845b97f692988d75c4a026609e61 AS runtime
+FROM eclipse-temurin:21-jre-alpine-3.24@sha256:51ab5e3302e7141ce665ca3ea85e8b5cd648eafbc3c0c90dd79d6537684e4555 AS runtime
 
 # A fixed, unprivileged user with no login shell and no home worth having.
 RUN addgroup -S -g 10001 controlweb && adduser -S -u 10001 -G controlweb -h /app -s /sbin/nologin controlweb
