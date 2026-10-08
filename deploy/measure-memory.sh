@@ -67,6 +67,10 @@ db=$(compose ps -q controlweb-db)
 log "Healthy $healthy_after s after 'up' (includes the database)."
 log "$(docker logs "$app" 2>&1 | grep -m1 'Started ControlwebApplication')"
 
+log ""
+log "== Hardening as applied by Docker (deploy/verify-container.sh) =="
+bash "$(dirname "$0")/verify-container.sh" "$app" 2>&1 | tee -a "$report"
+
 api() { # api <method> <path> [json-body] [token]
   local method=$1 path=$2 body=${3:-} token=${4:-}
   local args=(-q -O - -T 15)
@@ -123,4 +127,4 @@ log "Checks stored: $(docker exec "$db" sh -c 'psql -U "$POSTGRES_USER" -d "$POS
 log "Warnings/errors in the application log: $(docker logs "$app" 2>&1 | grep -cE ' (WARN|ERROR) ')"
 log "Image size: $(docker image inspect --format '{{.Size}}' "$image" | awk '{printf "%.0f MB", $1/1000000}')"
 log ""
-log "Report written to $report"
+log "Report written to $(native "$report")"

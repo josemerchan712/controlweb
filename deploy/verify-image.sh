@@ -7,6 +7,8 @@
 # compiled classes only (no .java, no test classes); the process runs as an unprivileged numeric user; a health check
 # exists; and no environment variable of the image looks like a secret. Exit status 0 = all good.
 set -euo pipefail
+export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'   # Git Bash on Windows must not rewrite /app/... as a Windows path
+native() { if command -v cygpath > /dev/null 2>&1; then cygpath -m "$1"; else echo "$1"; fi; }
 
 image=${1:?usage: deploy/verify-image.sh <image>}
 failures=0
@@ -31,8 +33,8 @@ if grep -qE '^app/' "$work/files.txt"; then ok "the application lives in /app"; 
 
 # --- the jar: compiled classes only ---
 PY=$(command -v python3 || command -v python)
-docker cp "$cid:/app/application.jar" "$work/application.jar" > /dev/null
-"${PY}" - "$work/application.jar" <<'PYEOF' || failures=$((failures + 1))
+docker cp "$cid:/app/application.jar" "$(native "$work/application.jar")" > /dev/null
+"${PY}" - "$(native "$work/application.jar")" <<'PYEOF' || failures=$((failures + 1))
 import sys, zipfile
 names = zipfile.ZipFile(sys.argv[1]).namelist()
 bad = [n for n in names if n.endswith('.java') or n.startswith('src/') or 'src/test' in n

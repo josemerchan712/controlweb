@@ -6,6 +6,7 @@
 # Every line is a plain `docker inspect` / `docker exec` check you can also run by hand; docs/DESPLIEGUE.md lists them.
 # Exit status 0 = everything as designed.
 set -uo pipefail
+export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'   # Git Bash on Windows must not rewrite /proc/... or /dev/null
 
 container=${1:?usage: deploy/verify-container.sh <container>}
 failures=0
