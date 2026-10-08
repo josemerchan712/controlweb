@@ -8,6 +8,12 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/controlweb}
     username: ${DB_USERNAME:controlweb}
     password: ${DB_PASSWORD:}
+  task:
+    scheduling:
+      shutdown:
+        # Let a running cycle finish (CheckRunner waits for its checks) before the scheduler stops.
+        await-termination: true
+        await-termination-period: 15s
   jpa:
     open-in-view: false
     hibernate:
@@ -33,6 +39,12 @@ app:
     request-timeout: 10s  # status + headers of one request (every redirect hop is another request)
     max-redirects: 5
     user-agent: ControlWeb/1.0
+  scheduler:
+    enabled: true          # periodic cycle; manual checks work either way
+    initial-delay: 5s
+    fixed-delay: 10s       # pause between the END of a cycle and the start of the next
+    max-concurrency: 10    # checks running at the same time
+    shutdown-timeout: 10s  # wait for running checks when the application stops
   # Thresholds of the alert rules created for every new site.
   alert-defaults:
     down-consecutive-failures: 2

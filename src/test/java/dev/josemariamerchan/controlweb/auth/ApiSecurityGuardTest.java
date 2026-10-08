@@ -88,7 +88,7 @@ class ApiSecurityGuardTest {
 		Set<String> found = apiEndpoints().stream().map(Endpoint::toString).collect(Collectors.toCollection(TreeSet::new));
 
 		assertThat(found).contains("POST /api/auth/login", "GET /api/auth/me", "GET /api/sites", "POST /api/sites",
-				"GET /api/sites/{id}", "PUT /api/sites/{id}", "DELETE /api/sites/{id}");
+				"GET /api/sites/{id}", "PUT /api/sites/{id}", "DELETE /api/sites/{id}", "POST /api/sites/{id}/check");
 	}
 
 	@Test

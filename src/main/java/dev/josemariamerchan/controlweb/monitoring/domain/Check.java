@@ -64,7 +64,16 @@ public class Check {
 	}
 
 	public static Check down(Site site, Instant checkedAt, Integer statusCode, Integer latencyMs, String errorMessage) {
-		return new Check(site, checkedAt, false, statusCode, latencyMs, errorMessage, null);
+		return down(site, checkedAt, statusCode, latencyMs, errorMessage, null);
+	}
+
+	/**
+	 * A failed check. The certificate expiry is kept when known: a site can fail over HTTP (e.g. a 503)
+	 * after a perfectly good TLS handshake, and the SSL_EXPIRING rule still needs that date.
+	 */
+	public static Check down(Site site, Instant checkedAt, Integer statusCode, Integer latencyMs, String errorMessage,
+			Instant certExpiresAt) {
+		return new Check(site, checkedAt, false, statusCode, latencyMs, errorMessage, certExpiresAt);
 	}
 
 	public Long getId() {

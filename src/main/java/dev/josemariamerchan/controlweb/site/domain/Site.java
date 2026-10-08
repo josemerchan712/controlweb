@@ -73,6 +73,11 @@ public class Site {
 		this.updatedAt = now;
 	}
 
+	/** Records that a check of this site just ran, whatever its outcome. */
+	public void markChecked(Instant checkedAt) {
+		this.lastCheckedAt = checkedAt;
+	}
+
 	public Long getId() {
 		return id;
 	}

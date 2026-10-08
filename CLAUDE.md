@@ -41,7 +41,8 @@ docker compose down                # parar la base de datos
 - Paso 1 (esquema Flyway V1 + entidades + tests de repositorio): hecho.
 - Paso 2 (CRUD de sitios + protección SSRF): hecho.
 - Paso 3 (seguridad JWT): hecho.
-- Paso 4 (checker HTTP + SSL): hecho. Siguiente: paso 5 (scheduler que ejecuta el checker y guarda los `Check`).
+- Paso 4 (checker HTTP + SSL): hecho.
+- Paso 5 (scheduler + comprobación manual): hecho. Siguiente: paso 6 (motor de reglas e incidencias).
 
 ## CRUD de sitios y SSRF (paso 2)
 - `SiteUrlNormalizer` canonicaliza la URL antes de guardar (esquema y host en minúsculas, sin punto final en el host,
@@ -105,6 +106,29 @@ guardarlo también en checks fallidos por HTTP, p. ej. un 503 con certificado v�
 - **Tests** sin WireMock ni archivos de claves: servidores `com.sun.net.httpserver` (HTTP/HTTPS) y certificados EC generados
   en memoria con BouncyCastle (solo `test`): CA de confianza, hoja válida, caducada, aún no válida, host incorrecto y CA
   desconocida (`TestServer`, `TestPki`).
+
+## Scheduler y comprobación manual (paso 5)
+- **Trigger**: `CheckScheduler` con `@Scheduled(fixedDelay)` (NO `fixedRate`; un test inspecciona la tarea registrada).
+  Solo existe si `app.scheduler.enabled=true` (por defecto sí; el perfil `test` lo desactiva y los tests llaman a
+  `CheckRunner.runCycle()` directamente). Propiedades `app.scheduler.*`: `initial-delay` 5 s, `fixed-delay` 10 s,
+  `max-concurrency` 10, `shutdown-timeout` 10 s.
+- **Selección de pendientes** (`SiteRepository.findDueSiteIds(now)`, SQL nativo): sitios activos, nunca comprobados o con
+  `last_checked_at + check_interval_seconds <= now`; primero los nunca comprobados y luego los más atrasados. El `now` viene
+  del `Clock` inyectado, no del reloj de PostgreSQL. `Check.checked_at` y `last_checked_at` son el instante de INICIO del check.
+- **`CheckService.runCheck(id)` no es `@Transactional`**: tx corta de lectura (URL) → check de red SIN transacción ni conexión
+  → tx corta de escritura (guarda el `Check` y `last_checked_at`, incluso si el check falló). Dos tests lo prueban: orden de
+  begin/commit/red, y que el pool Hikari tiene 0 conexiones activas durante la petición (comprobado con una mutación).
+  El `cert_expires_at` también se guarda en checks fallidos por HTTP (`Check.down(..., certExpiresAt)`).
+- **`InFlightGuard`** (conjunto concurrente de ids) compartido por el ciclo y la comprobación manual: nunca dos checks del mismo
+  sitio a la vez. El ciclo se salta los sitios ocupados; el endpoint manual responde 409.
+- **`CheckRunner`**: executor de virtual threads + `Semaphore(max-concurrency)`. El ciclo espera a que terminen todos sus
+  checks (así el `fixedDelay` cuenta desde el final y un ciclo lento retrasa al siguiente). Los checks manuales no cuentan
+  para el límite. Un fallo (excepción inesperada, sitio borrado durante el check, BD caída al listar) se captura, se registra
+  con el nombre de la clase y el mensaje saneado (sin query strings, sin stacktrace) y no afecta a los demás.
+- **Parada limpia** (`@PreDestroy`): deja de aceptar trabajo, espera `shutdown-timeout` a los checks en curso y luego los
+  interrumpe. `spring.task.scheduling.shutdown.await-termination=true` deja terminar el ciclo en marcha.
+- **`POST /api/sites/{id}/check`** (JWT): ejecuta el check ya (también en sitios inactivos), guarda y devuelve el resultado
+  (`CheckResponse`); 404 si no existe, 409 si ya hay un check en curso. Un sitio caído es un 200 (el fallo es el resultado).
 
 ## Seguridad (paso 3)
 - **Denegar por defecto**: `SecurityConfig` exige JWT en todo salvo `POST /api/auth/login`, `/api/public/**` y

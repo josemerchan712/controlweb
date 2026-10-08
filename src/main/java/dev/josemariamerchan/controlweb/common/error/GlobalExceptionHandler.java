@@ -16,6 +16,7 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
 
 import dev.josemariamerchan.controlweb.auth.service.InvalidCredentialsException;
 import dev.josemariamerchan.controlweb.common.net.UnsafeHostException;
+import dev.josemariamerchan.controlweb.monitoring.service.CheckInProgressException;
 import dev.josemariamerchan.controlweb.site.service.DuplicateSiteException;
 import dev.josemariamerchan.controlweb.site.service.InvalidSiteUrlException;
 import dev.josemariamerchan.controlweb.site.service.SiteNotFoundException;
@@ -48,6 +49,11 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 	@ExceptionHandler(SiteNotFoundException.class)
 	ProblemDetail handleNotFound(SiteNotFoundException ex) {
 		return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
+	}
+
+	@ExceptionHandler(CheckInProgressException.class)
+	ProblemDetail handleCheckInProgress(CheckInProgressException ex) {
+		return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
 	}
 
 	@ExceptionHandler(DuplicateSiteException.class)

@@ -61,4 +61,19 @@ class CheckRepositoryTest {
 		assertThat(found.getLatencyMs()).isNull();
 		assertThat(found.getErrorMessage()).isEqualTo("Connection refused");
 	}
+
+	@Test
+	@DisplayName("a failed check keeps the certificate expiry when the handshake had worked")
+	void failedCheckKeepsCertificateExpiry() {
+		Site site = sites.save(new Site("Blog", "https://blog.example.com", 60, T0));
+		Instant certExpiry = Instant.parse("2026-06-01T00:00:00Z");
+
+		Check saved = checks.saveAndFlush(Check.down(site, T0, 503, 90, "HTTP 503", certExpiry));
+		em.clear();
+
+		Check found = checks.findById(saved.getId()).orElseThrow();
+		assertThat(found.isUp()).isFalse();
+		assertThat(found.getStatusCode()).isEqualTo(503);
+		assertThat(found.getCertExpiresAt()).isEqualTo(certExpiry);
+	}
 }
