@@ -9,7 +9,8 @@ import dev.josemariamerchan.controlweb.config.CheckerProperties;
 
 /**
  * SSRF guard: refuses hosts that resolve to loopback, private, link-local, multicast, reserved or
- * otherwise non-public addresses, so the monitor cannot be used to probe the internal network or
+ * otherwise non-public addresses (including the documentation and benchmarking ranges that the egress firewall also
+ * blocks, so both layers agree), so the monitor cannot be used to probe the internal network or
  * the cloud metadata endpoint (169.254.169.254).
  *
  * <p>It re-resolves the host on every call. Callers must therefore invoke it right before each
@@ -55,7 +56,7 @@ public class HostSafetyValidator {
 	static boolean isForbidden(InetAddress address) {
 		byte[] bytes = address.getAddress();
 		if (bytes.length == 4) {
-			return isForbiddenIpv4(bytes[0] & 0xFF, bytes[1] & 0xFF);
+			return isForbiddenIpv4(bytes[0] & 0xFF, bytes[1] & 0xFF, bytes[2] & 0xFF);
 		}
 		if (address.isAnyLocalAddress() || address.isLoopbackAddress() || address.isLinkLocalAddress()
 				|| address.isSiteLocalAddress() || address.isMulticastAddress()) {
@@ -67,10 +68,10 @@ public class HostSafetyValidator {
 		}
 		// IPv4 hidden inside IPv6 must be judged by the IPv4 rules.
 		byte[] embedded = embeddedIpv4(bytes);
-		return embedded != null && isForbiddenIpv4(embedded[0] & 0xFF, embedded[1] & 0xFF);
+		return embedded != null && isForbiddenIpv4(embedded[0] & 0xFF, embedded[1] & 0xFF, embedded[2] & 0xFF);
 	}
 
-	private static boolean isForbiddenIpv4(int first, int second) {
+	private static boolean isForbiddenIpv4(int first, int second, int third) {
 		return first == 0 // "this network"
 				|| first == 10 // private
 				|| (first == 100 && (second & 0xC0) == 64) // 100.64.0.0/10 shared address space (CGNAT)
@@ -78,6 +79,10 @@ public class HostSafetyValidator {
 				|| (first == 169 && second == 254) // link-local, cloud metadata
 				|| (first == 172 && (second & 0xF0) == 16) // 172.16.0.0/12 private
 				|| (first == 192 && second == 168) // private
+				|| (first == 192 && second == 0 && (third == 0 || third == 2)) // 192.0.0.0/24 protocol assignments, 192.0.2.0/24 TEST-NET-1
+				|| (first == 198 && (second & 0xFE) == 18) // 198.18.0.0/15 benchmarking
+				|| (first == 198 && second == 51 && third == 100) // 198.51.100.0/24 TEST-NET-2
+				|| (first == 203 && second == 0 && third == 113) // 203.0.113.0/24 TEST-NET-3
 				|| first >= 224; // multicast, reserved and broadcast
 	}
 

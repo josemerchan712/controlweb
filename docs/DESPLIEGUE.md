@@ -304,8 +304,9 @@ opcional. UptimeRobot Free: 50 monitores a 5 min, uso no comercial y Telegram pr
 | **C0 [CW]** | Este documento | Revisión | revert |
 | **C1 [CW]** ✅ | Rate limiting + `ClientIpResolver` | Hecho: ver «Implementación de C1» | revert |
 | **C2 [CW]** ✅ | Tests SSRF de límites (`HostSafetyBoundaryTest`) | Hecho: 47 casos, con mutaciones comprobadas | revert |
+| **C2b [CW]** ✅ | Rangos de documentación y benchmarking en `HostSafetyValidator` | Hecho (ver requisitos de C5) | revert |
 | **C3 [CW]** | Heartbeat opcional (`app.heartbeat.url`, vacío = apagado) | Test con servidor local; la URL nunca en logs | revert |
-| **C4 [CW]** *(si S0 da 403)* | Mensaje "desafío de Cloudflare" | Tests | revert |
+| **C4 [CW]** *(omitido por ahora; ver S0)* | Mensaje "desafío de Cloudflare" | Tests | revert |
 | **C5 [CW]** | `application-prod.yml`, protección `prod`, Flyway `*:future`, cron de retención | Test del perfil (ver requisitos) | revert |
 | **C6 [CW]** | Dockerfile, `compose.prod.yml`, job de CI de la imagen | ⏸ En local con límite de 512 MiB; anotar RSS tras 10 min | revert |
 | **C7 [CW]** | `deploy/` completo + shellcheck en CI | `bash -n`, shellcheck, revisión | revert |
@@ -314,13 +315,18 @@ opcional. UptimeRobot Free: 50 monitores a 5 min, uso no comercial y Telegram pr
 - El perfil `prod` **debe negarse a arrancar si `app.proxy.trusted-addresses` está vacío**, con test. Sin esa IP todos los
   clientes comparten la IP de Caddy (el peer TCP) y 5 fallos de login bloquearían el acceso de todo el mundo.
 - Además, `allow-private-hosts=true` sigue impidiendo arrancar con el perfil `prod`.
-- Pendiente de decidir en C5 (hallazgo de C2): el firewall de salida bloquea también rangos de documentación y benchmarking
-  (192.0.0.0/24, 192.0.2.0/24, 198.18.0.0/15, 198.51.100.0/24, 203.0.113.0/24) que `HostSafetyValidator` hoy permite. No es un
-  riesgo (el firewall es la capa extra), pero si se quiere coherencia hay que añadirlos al validador con sus tests de borde.
+- **Resuelto en C2b:** el firewall de salida bloquea también rangos de documentación y benchmarking (192.0.0.0/24, 192.0.2.0/24,
+  198.18.0.0/15, 198.51.100.0/24, 203.0.113.0/24) y ahora `HostSafetyValidator` los bloquea igual, con
+  `HostSafetyDocumentationRangesTest` (extremos bloqueados, vecinas permitidas, también mapeados en IPv6 y con 4 mutaciones
+  comprobadas). Las dos capas coinciden en estos rangos.
 
 ### Fase B: servidor
 
-- **S0 [SRV, solo lectura]:** el `curl` del punto 12 y la consulta de rutas/subredes existentes.
+- **S0 [SRV, solo lectura] ✅ hecho:** desde el VPS, con `curl -4` y `User-Agent: ControlWeb/1.0`, `josemariamerchan.dev`,
+  `rottenodds.josemariamerchan.dev` y `rottenodds-api.josemariamerchan.dev/health` responden **200 y sin `cf-mitigated`**, por lo que
+  **C4 se omite por ahora**. **Se reconfirma en S8** con los primeros checks reales de ControlWeb: el cliente HTTP de Java tiene
+  otra huella TLS que `curl`, y Cloudflare podría tratarlo distinto. Si en S8 aparecen 403 de Cloudflare, se retoma C4 (mensaje
+  "desafío de Cloudflare") y la regla WAF personalizada con Skip (punto 12).
 - **S1 [SRV] Swap 2 GiB:** `fallocate`, `mkswap`, `swapon`, entrada en `/etc/fstab`, `vm.swappiness=10`. Comprobar con
   `swapon --show; free -m; sudo findmnt --verify`. Deshacer: `swapoff`, borrar la línea de fstab y los ficheros.
 - **S2 [SRV] SSH (opcional):** el endurecimiento base ya existe en `00-hardening.conf`. El drop-in nuevo
@@ -355,7 +361,7 @@ opcional. UptimeRobot Free: 50 monitores a 5 min, uso no comercial y Telegram pr
 
 - **S7 [CF + SRV]:** registro A `status-api` → `<IP_PUBLICA_VPS>` en **DNS only**; `sudo caddy-install.sh`. Comprobar certificado
   y cabeceras. Deshacer: borrar el fragmento y `caddy reload`.
-- **S8:** alta de los tres sitios, regla WAF si S0 la pidió, heartbeat, Worker opcional y `POST /api/alerts/test`.
+- **S8:** alta de los tres sitios y **reconfirmación de que Cloudflare no devuelve 403 a los checks de Java** (ver S0; si lo hace, C4 y regla WAF), heartbeat, Worker opcional y `POST /api/alerts/test`.
 - **S9 ⏸ Batería final:** health `UP`; Swagger, `/v3/api-docs` y `/actuator/env` → 404; 6 logins erróneos → 5×401 y luego 429 con
   `Retry-After`; lo mismo cambiando `X-Forwarded-For` (sigue el 429); CORS de `/api/public/status` con el origen del portfolio
   (permitido) y con otro (no); `/api/sites` sin cabecera CORS desde el portfolio; `sudo reboot` (todo vuelve solo, firewall
