@@ -1,0 +1,362 @@
+# Fase 2: producción en el VPS de Hetzner (plan)
+
+> **Estado:** plan aprobado el 2026-10-08. **Nada de esto se ha ejecutado en el servidor.** Cada paso se hace por separado:
+> tests/revisión primero, un commit por paso, y se para para que el usuario lo revise.
+>
+> Convenciones: **[CW]** solo este repo · **[SRV]** servidor, sin tocar Rotten Odds · **[RO]** repo de Rotten Odds (con
+> especial cuidado) · **[CF]** Cloudflare · ⏸ = parar y probar antes de seguir.
+>
+> Este documento no lleva secretos. La IP pública del VPS se escribe `<IP_PUBLICA_VPS>`; las IP internas de Docker
+> (10.77.0.0/16) solo tienen sentido dentro del servidor.
+
+## Cambios acordados al aprobar el plan
+
+1. Este documento se guarda en un primer commit, antes de escribir código.
+2. **Orden S5/S6 (decisión):** se mantiene S5 (primer despliegue) antes que S6 (copias) y `deploy.sh` **omite la copia previa
+   cuando no hay versión anterior**, es decir, mientras no exista la imagen `controlweb-app:current` ni el fichero
+   `.deploy-previous` (primer despliegue: no hay nada que proteger, la base de datos está vacía). En cualquier despliegue
+   posterior la copia previa es **obligatoria**: si `controlweb-backup.service` no existe o falla, el despliegue se aborta.
+   Así S5 no depende de S6 y, después de S6, ningún despliegue puede saltarse la copia.
+3. **Rate limiting:** se corrige una afirmación del borrador. Ver [Limitación conocida](#limitación-conocida-bloqueo-de-la-cuenta-por-muchas-ips).
+4. **SSH (S2):** ya existe `/etc/ssh/sshd_config.d/00-hardening.conf` (`PermitRootLogin no`, `PasswordAuthentication no`,
+   `KbdInteractiveAuthentication no`, `PubkeyAuthentication yes`). El drop-in nuevo **solo añade** `AllowUsers jose` y
+   `MaxAuthTries 3`, y se verifica con `sshd -T`.
+5. **R1 requiere** haber comprobado antes que existe la **primera copia de Hetzner** (ver S-R1).
+
+## Resumen de decisiones
+
+| Tema | Decisión | Motivo principal |
+|---|---|---|
+| Base de datos | PostgreSQL propio de ControlWeb | Compartir obligaría a entrar en `rottenodds_internal` (prohibido) y su `backup.sh` tiene la base fija |
+| Redes | Red compartida nueva `controlweb_proxy` (`internal`, subred fija) + red de BD propia + red de salida propia | Caddy con IP fija (10.77.0.10) sin depender de `rottenodds_edge` |
+| Caddy | `import` de fragmentos desde `/opt/caddy-sites` (fuera del repo) | Un único commit en Rotten Odds; luego ControlWeb no lo vuelve a tocar |
+| Imagen | Se construye en el PC y se sube con `docker save -o` → `scp` → `docker load -i` | Sin token en el servidor y sin compilar en él |
+| Memoria | Swap de 2 GiB (swappiness 10) y límites por contenedor | Red de seguridad, no capacidad |
+| Copia fuera del servidor | Backups de Hetzner + copia diaria cifrada con `age` que descarga el PC | Las dos sin tarjeta nueva |
+| Aviso externo | Heartbeat a healthchecks.io (+ Worker de Cloudflare opcional) | Gratis, sin tarjeta, detecta servidor y scheduler parados |
+
+## 1. Rate limiting del login
+
+**Librería:** Bucket4j core (sin starter) + Caffeine para acotar memoria. Bucket4j acepta un `TimeMeter` propio: se conecta
+al `Clock` de la aplicación y los tests lo controlan con `TestClock`.
+
+| Cubo | Qué cuenta | Para qué |
+|---|---|---|
+| IP · peticiones | todas las de login | Inundación, incluido JSON malformado |
+| IP · fallos | credenciales incorrectas | Fuerza bruta desde una IP |
+| Cuenta · fallos | email normalizado, **exista o no** | Fuerza bruta distribuida (muchas IP) |
+| Global | todos los intentos | Que BCrypt (~100 ms) no sea un vector de DoS |
+
+Comportamiento:
+- Los límites se comprueban **antes** de BCrypt: una petición rechazada no cuesta CPU.
+- Respuesta: 429 `ProblemDetail` con `Retry-After`, con el mismo mensaje sea cual sea el cubo agotado.
+- El límite por cuenta también cuenta emails inexistentes (si no, un 429 delataría cuál es el email del administrador).
+- Un login correcto no gasta fichas de fallos.
+- Memoria acotada (10.000 claves por tipo, expiración tras 2 h sin uso).
+
+### Limitación conocida: bloqueo de la cuenta por muchas IPs
+
+El límite por cuenta protege contra la fuerza bruta distribuida, pero tiene un coste que hay que asumir:
+**un atacante con muchas IP puede mantener vacío el cubo de la cuenta y bloquear el login del administrador, incluso con la
+contraseña correcta**, porque el límite se comprueba antes de mirar la contraseña. Cuesta muy poco (unas pocas peticiones
+por hora bastan) y subir el límite solo encarece el ataque marginalmente.
+
+Lo que sí es cierto:
+- No hay bloqueo permanente: en cuanto el atacante para, el cubo se recarga solo.
+- Solo se bloquea el **login**. Las comprobaciones, las incidencias y los avisos de Telegram siguen funcionando, y el token
+  ya emitido sigue siendo válido hasta que caduca.
+- **Salida de emergencia:** entrar por SSH y reiniciar la aplicación (`docker compose -p controlweb restart controlweb-app`).
+  Los cubos viven en memoria y se vacían. Si el ataque continúa, el cubo se vuelve a vaciar; en ese caso, bloquear el
+  origen en el Cloud Firewall de Hetzner o esperar.
+- Se acepta porque es un panel de un solo administrador y la disponibilidad del login es menos importante que impedir
+  el acierto de la contraseña.
+
+**IP real detrás de Caddy:** `ClientIpResolver` propio con `app.proxy.trusted-addresses` (IP exactas, sin rangos ni nombres;
+arranque fail-fast si no son literales; vacío por defecto = nunca se confía en `X-Forwarded-For`). En producción:
+`10.77.0.10`, la IP fija de Caddy en `controlweb_proxy`. Solo si el peer TCP es esa IP se toma la entrada **más a la
+derecha** de `X-Forwarded-For` (Caddy, sin proxies de confianza, la reescribe con la IP real).
+
+**Cloudflare:** `status-api` en **DNS only** (como la API de Rotten Odds). Si algún día pasara a proxied, Caddy vería IP de
+Cloudflare: habría que confiar en sus rangos y leer `CF-Connecting-IP`, y su filtro anti-bots se aplicaría a la propia API.
+
+Tests (con `TestClock`): el 6.º fallo da 429 con `Retry-After` correcto; tras avanzar el tiempo se permite uno; un login
+correcto no cuenta; límite por cuenta repartido entre IP distintas; email existente e inexistente responden igual; con 429 no
+se invoca BCrypt; `X-Forwarded-For` desde un peer no confiable se ignora; configurar `trusted-addresses` con un rango o un
+nombre impide arrancar; mutación quitando la comprobación previa a BCrypt.
+
+## 2. Base de datos
+
+PostgreSQL propio (`shared_buffers=32MB`, `max_connections=20`, pool Hikari de 5). Frente a una base nueva en el de Rotten
+Odds: +40–80 MiB reales, pero aislamiento total (versión, configuración, reinicios), backup propio y cero riesgo para Rotten
+Odds. Compartir exigiría unirse a `rottenodds_internal`, lo que queda descartado.
+
+## 3. Redes
+
+| Red | Creada por | Subred | Bridge | `internal` | Miembros |
+|---|---|---|---|---|---|
+| `controlweb_proxy` | `docker network create` (una vez, a mano) | 10.77.0.0/24 | `cw-proxy` | sí | Caddy .10, app .20 |
+| `controlweb_db` | Compose de ControlWeb | 10.77.1.0/24 | `cw-db` | sí | app, PostgreSQL |
+| `controlweb_egress` | Compose de ControlWeb | 10.77.2.0/24 | `cw-egress` | no | **solo la app** |
+
+- 10.77.0.0/16 está fuera de los pools por defecto de Docker, así que ninguna red automática futura chocará.
+- `controlweb_proxy` es `internal` para que la ruta por defecto de Caddy (y su salida ACME) no cambie al unirse. Se comprueba
+  con `ip route` dentro del contenedor.
+- La crea una orden manual, no un Compose, para que ningún `down` de ningún proyecto la borre.
+- Servicios `controlweb-app` y `controlweb-db`: ningún `api`, `db` ni `caddy`. Caddy no está en `controlweb_db` y la app no
+  está en ninguna red de Rotten Odds. Se demuestra con `nslookup` (ver S5/R1).
+
+## 4. Caddy
+
+Elegida la opción **(b)**: un `import` de fragmentos fuera del repo. Cambio mínimo en el Caddyfile de Rotten Odds:
+
+```caddy
+# Sitios de otros proyectos de este servidor (fragmentos fuera del repo). Si no hay ninguno, Caddy solo avisa.
+import /etc/caddy/sites/*.caddy
+```
+
+En su Compose (servicio `caddy`): volumen `/opt/caddy-sites:/etc/caddy/sites:ro`, y la red externa `controlweb_proxy` con
+`ipv4_address: 10.77.0.10`. Un glob sin coincidencias es un aviso, no un error (se comprueba con `caddy validate`).
+
+Riesgo: un fragmento roto en disco + un reinicio = Caddy no arranca y **cae Rotten Odds**. Por eso el fragmento solo se instala
+con `caddy-install.sh`, que valida con un contenedor desechable (misma imagen que el Caddy en marcha), mueve el fichero de
+forma atómica y solo entonces hace `caddy reload` (sin corte).
+
+Fragmento de ControlWeb (`deploy/caddy/controlweb.caddy`, instalado como root, 644):
+
+```caddy
+status-api.josemariamerchan.dev {
+	encode zstd gzip
+	request_body {
+		max_size 64KB
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		Content-Security-Policy "default-src 'none'; frame-ancestors 'none'"
+		-Server
+	}
+	@hidden {
+		path /actuator* /v3/api-docs* /swagger-ui*
+		not path /actuator/health
+	}
+	respond @hidden 404
+	reverse_proxy controlweb-app:8080
+}
+```
+
+**CORS: solo en la app** (una única fuente de verdad, ya probada). Caddy no añade ni quita `Access-Control-*`.
+
+## 5. Dockerfile y perfil `prod`
+
+- Construcción: `eclipse-temurin:21-jdk` + Maven con caché BuildKit + `-Djarmode=tools extract --layers`.
+- Ejecución: `eclipse-temurin:21-jre-alpine`, usuario `10001`, healthcheck con el `wget` de busybox
+  (`wget -q -O /dev/null http://127.0.0.1:8080/actuator/health`).
+- Compose: `read_only: true`, `tmpfs: /tmp`, `cap_drop: [ALL]`, `no-new-privileges`, `pids_limit`, logs `json-file`
+  (`max-size 10m`, `max-file 3`).
+- JVM (se mide en local con `--memory=512m` antes de subir nada): `-XX:+UseSerialGC -Xms128m -Xmx256m
+  -XX:MaxMetaspaceSize=160m -XX:ReservedCodeCacheSize=64m -Xss512k -XX:MaxDirectMemorySize=32m -XX:+ExitOnOutOfMemoryError`,
+  en `JAVA_TOOL_OPTIONS`. RSS esperado ≈ 330–420 MiB → límite de contenedor **512 MiB**.
+- `application-prod.yml`: sin Swagger, scheduler activo, retención 90 días con cron `0 45 4 * * *`,
+  `trusted-addresses: 10.77.0.10`, Hikari 5, `spring.flyway.ignore-migration-patterns: "*:future"`, secretos solo por entorno.
+  Con el perfil `prod`, `allow-private-hosts=true` impide arrancar.
+
+## 6. Construcción y entrega de la imagen
+
+Elegida **(c)**: construir en el PC desde un worktree limpio de un commit con CI en verde y subir con
+`docker save -o` → `scp` → `ssh docker load -i`. Sin credenciales en el servidor. (a) Construir en el servidor necesita
+1,5–1,9 GiB de pico sin swap y arriesga al OOM killer sobre Rotten Odds; (b) GHCR exigiría un PAT clásico `read:packages`
+(lectura de todos tus paquetes) guardado en claro en el servidor.
+
+En PowerShell 5.1 `docker save | ssh …` y `ssh … > fichero` **corrompen binarios** (tuberías de texto/UTF-16): los scripts
+usan ficheros intermedios. El CI añade un job que construye la imagen sin publicarla. El repo se clona en el servidor solo para
+los ficheros de `deploy/`, con **deploy key propia de solo lectura** y alias SSH propio.
+
+## 7. Memoria (3.790 MiB)
+
+| Contenedor | Uso real | Límite |
+|---|---|---|
+| Rotten Odds api | 277 | 1.024 |
+| Rotten Odds db | 67 | 768 |
+| Caddy | ~40–60 | sin límite (no se toca) |
+| **ControlWeb app** | ~330–420 | **512** (`memswap_limit` = 512) |
+| **ControlWeb db** | ~40–80 | **256** (`memswap_limit` = 256) |
+| Sistema + Docker | ~400–450 | — |
+
+Uso real esperado ≈ 1.250 MiB (≈ 2.500 MiB libres). Todo al límite ≈ 3.110 MiB: cabe. Swap de 2 GiB solo como red de
+seguridad (`apt`, `docker load`, `pg_dump`) y para que el OOM killer no elija la API de Rotten Odds. Efecto a conocer: los
+contenedores de Rotten Odds sin `memswap_limit` pueden usar swap antes de que los mate el OOM (más lentos en vez de muertos).
+
+## 8. Despliegue y vuelta atrás
+
+`deploy/release.ps1` (PC): árbol limpio, en `main` y subido → construye `controlweb-app:<sha>` → `docker save -o` → `scp` →
+`ssh docker load -i` → `ssh deploy.sh <sha>`. El CI en verde de ese commit lo verifica el usuario en GitHub.
+
+`deploy/deploy.sh` (servidor, como jose):
+1. Se niega si hay cambios locales o si el firewall (`controlweb-firewall.service`) no está activo.
+2. `git pull --ff-only` (solo ficheros de despliegue).
+3. **Copia previa:** obligatoria si hay versión anterior; **se omite solo en el primer despliegue** (sin `.deploy-previous` ni
+   imagen `:current`). Si hay versión anterior y la copia falla, aborta.
+4. Guarda la versión actual (`.deploy-previous`, `:current` → `:previous`), etiqueta la nueva, `up -d` y espera al healthcheck.
+5. Si falla: sin migraciones nuevas → rollback automático; con migraciones nuevas → se detiene y se indica qué copia restaurar
+   (no restaura sola).
+6. Subcomando `rollback` manual. Conserva las 3 últimas imágenes.
+
+Flyway solo va hacia delante: migraciones solo aditivas (columnas nulables, tablas nuevas); con `*:future` la imagen anterior
+arranca sobre un esquema más nuevo. Un cambio destructivo exige restaurar la copia previa.
+
+Secretos: `/opt/controlweb/.env.prod`, `root:jose`, modo 640, distintos de los locales y generados **en el servidor**.
+Telegram de producción: bot nuevo y el mismo chat (enviarle `/start` al bot nuevo antes de la primera prueba).
+
+## 9. Copias de seguridad
+
+Scripts de root en `/usr/local/lib/controlweb/` (instalados con `sudo install`, **no editables por jose**; no se copia el patrón
+de Rotten Odds, cuyo servicio ejecuta como root un script en una ruta escribible por jose). Timers:
+`controlweb-backup.timer` 04:15 UTC y `controlweb-restore-test.timer` domingos 05:00 UTC.
+
+`pg_dump -Fc`, verificación con `pg_restore --list`, rotación de 14 días en `/var/backups/controlweb` (700) y
+**restauración real** semanal en una base temporal (`--exit-on-error`, comprobación de tablas, versión de Flyway y filas),
+que se borra después. Prueba manual trimestral desde la copia del PC en un Docker local.
+
+| Opción fuera del servidor | Tarjeta | Conclusión |
+|---|---|---|
+| Backups de Hetzner (+20 % ≈ 1,33 €/mes) | No | **Sí.** Cubren también Rotten Odds. Consistentes como ante un apagón: complementan a `pg_dump` |
+| Descarga al PC cifrada con `age` | No | **Sí.** El servidor cifra con la clave pública; la privada solo en el PC y en el gestor de contraseñas |
+| Backblaze B2 | Las fuentes se contradicen | Descartado mientras no se confirme |
+| Cloudflare R2 | Pide medio de pago | Descartado |
+
+Descarga al PC: clave SSH dedicada con `restrict,command=…` (solo puede leer la última copia `.age`), tarea de Windows diaria
+con "ejecutar lo antes posible si se perdió" (con el PC apagado se pone al día al encenderlo; más de 14 días apagado deja un
+hueco que cubre Hetzner). En PowerShell 5.1 usar `cmd /c "ssh … > fichero"`.
+
+## 10. Firewall de salida
+
+Script de root `/usr/local/sbin/controlweb-firewall` + `controlweb-firewall.service` (`Before=docker.service`,
+`WantedBy=multi-user.target`). Sin `iptables-persistent`. Todo cuelga de `-i cw-egress`, así que no afecta a Rotten Odds ni al
+tráfico Caddy↔app (`cw-proxy`) ni app↔BD (`cw-db`).
+
+```
+DOCKER-USER: -i cw-egress -j CW-EGRESS
+CW-EGRESS:
+  1 ESTABLISHED,RELATED                                              -> RETURN
+  2 tcp, ctstate DNAT, ctorigdst <IP_PUBLICA_VPS>, ctorigdstport 443 -> RETURN   (hairpin)
+  3 tcp, ctstate DNAT, ctorigdst <IP_PUBLICA_VPS>, ctorigdstport 80  -> RETURN
+  4 -d 0/8, 10/8, 100.64/10, 127/8, 169.254/16, 172.16/12, 192.0.0/24, 192.0.2/24, 192.168/16,
+       198.18/15, 198.51.100/24, 203.0.113/24, 224/4, 240/4          -> CW-DENY
+  5 resto                                                            -> RETURN
+CW-DENY: LOG limitado -> REJECT (tcp-reset / icmp-admin-prohibited)
+INPUT:   -i cw-egress -j CW-INPUT ;  CW-INPUT: ESTABLISHED,RELATED -> ACCEPT ; resto -> REJECT   (SSH incluido)
+```
+
+`DOCKER-USER` ve el destino tras el DNAT (el hairpin llega como 172.18.0.2:443): las reglas 2–3 permiten exactamente "lo que
+iba a la IP pública en 80/443" usando el destino original de conntrack, sin abrir ningún rango privado. Basta con IPv4 porque
+las redes Docker no tienen IPv6 (opcional: regla espejo en `ip6tables`).
+
+Pruebas desde `controlweb-app` (S5):
+
+| Prueba | Esperado |
+|---|---|
+| `wget -T5 https://example.com`, `nslookup example.com` | OK |
+| `wget -T5 https://rottenodds-api.josemariamerchan.dev/health` | 200 (hairpin) |
+| `nc -zw3 controlweb-db 5432` | OK |
+| `wget -T3 http://169.254.169.254/` | rechazado al instante |
+| `nc -zw3 172.28.0.10 443`, `nc -zw3 172.18.0.2 443` | rechazado |
+| `nc -zw3 10.77.2.1 22`, `nc -zw3 <IP_PUBLICA_VPS> 22` | rechazado (INPUT) |
+| `sudo iptables -L CW-EGRESS -vn` | suben los contadores de las reglas 2 y 4 |
+
+Riesgo a verificar en S5: que Docker 29 no aísle el tráfico DNAT entre bridges distintos (la prueba de hairpin hecha fue desde
+el mismo bridge). Plan B: vigilar esa URL solo con el monitor externo.
+
+## 11. Pruebas SSRF de límites
+
+`HostSafetyValidator` (resolver falso). **Permitir:** 172.67.164.248, 104.21.49.164, 172.15.255.255, 172.32.0.0, 100.63.255.255,
+100.128.0.0. **Bloquear:** 172.16.0.0, 172.31.255.255, 100.64.0.0, 100.127.255.255.
+
+## 12. Monitorización
+
+Antes de programar nada, medir (S0) con `curl -4 -A 'ControlWeb/1.0'` el código que devuelven las tres URL. Si Cloudflare
+responde 403/503 con `cf-mitigated: challenge`: regla WAF personalizada con `ip.src eq <IP_PUBLICA_VPS>` → Skip (custom rules,
+Browser Integrity Check, Security Level); Bot Fight Mode no se puede saltar en el plan gratuito. **No** se aceptan 403 como
+"correcto" (ocultaría una caída real). Mejora condicional (C4): que el error diga "desafío de Cloudflare".
+
+Altas: portfolio y casino cada 300 s; `rottenodds-api…/health` cada 60 s (umbral DOWN 2).
+
+Aviso externo: heartbeat de ControlWeb a healthchecks.io (Hobbyist, 20 checks, sin tarjeta según Capterra; confirmar al
+registrarse; integración con Telegram) con la URL secreta solo en `.env.prod`, más un Worker de Cloudflare con cron
+opcional. UptimeRobot Free: 50 monitores a 5 min, uso no comercial y Telegram probablemente solo de pago.
+
+## 13. Pasos
+
+### Fase A: solo este repo
+
+| Paso | Contenido | Comprobación | Deshacer |
+|---|---|---|---|
+| **C0 [CW]** | Este documento | Revisión | revert |
+| **C1 [CW]** | Rate limiting + `ClientIpResolver` | Tests del punto 1 + mutación; `verify` en verde | revert |
+| **C2 [CW]** | Tests SSRF de límites | Tests | revert |
+| **C3 [CW]** | Heartbeat opcional (`app.heartbeat.url`, vacío = apagado) | Test con servidor local; la URL nunca en logs | revert |
+| **C4 [CW]** *(si S0 da 403)* | Mensaje "desafío de Cloudflare" | Tests | revert |
+| **C5 [CW]** | `application-prod.yml`, protección `prod`, Flyway `*:future`, cron de retención | Test del perfil | revert |
+| **C6 [CW]** | Dockerfile, `compose.prod.yml`, job de CI de la imagen | ⏸ En local con límite de 512 MiB; anotar RSS tras 10 min | revert |
+| **C7 [CW]** | `deploy/` completo + shellcheck en CI | `bash -n`, shellcheck, revisión | revert |
+
+### Fase B: servidor
+
+- **S0 [SRV, solo lectura]:** el `curl` del punto 12 y la consulta de rutas/subredes existentes.
+- **S1 [SRV] Swap 2 GiB:** `fallocate`, `mkswap`, `swapon`, entrada en `/etc/fstab`, `vm.swappiness=10`. Comprobar con
+  `swapon --show; free -m; sudo findmnt --verify`. Deshacer: `swapoff`, borrar la línea de fstab y los ficheros.
+- **S2 [SRV] SSH (opcional):** el endurecimiento base ya existe en `00-hardening.conf`. El drop-in nuevo
+  (`/etc/ssh/sshd_config.d/10-controlweb.conf`) **solo añade** `AllowUsers jose` y `MaxAuthTries 3`. Aplicar con
+  `sudo sshd -t && sudo systemctl reload ssh` **con la sesión actual abierta**, entrar por una segunda sesión y verificar con
+  `sudo sshd -T | grep -Ei 'allowusers|maxauthtries|passwordauthentication|permitrootlogin|kbdinteractive|pubkeyauth'`.
+  No se restringe el puerto 22 por IP. Deshacer: borrar el drop-in y recargar.
+- **S3 [SRV] Deploy key, carpetas y secretos:** clave `~/.ssh/controlweb_deploy` (ed25519), bloque `Host github-controlweb` en
+  `~/.ssh/config` (sin pisar el de Rotten Odds), clave pública en GitHub → Deploy keys **sin escritura**, clon en
+  `~/controlweb`, `/opt/controlweb` (`root:jose`, 750), `/opt/caddy-sites` (755) y `.env.prod` (`root:jose`, 640) rellenado con
+  valores generados en el servidor con `openssl rand -base64 32` (nunca en el chat).
+- **S4 [SRV] Red compartida y firewall:** `docker network create --driver bridge --internal --subnet 10.77.0.0/24 --opt
+  com.docker.network.bridge.name=cw-proxy controlweb_proxy`; instalar el firewall con `sudo install` y
+  `sudo systemctl enable --now controlweb-firewall`. Comprobar `iptables -S DOCKER-USER/CW-EGRESS` y que Rotten Odds responde.
+  Deshacer: `systemctl disable --now controlweb-firewall` y `docker network rm controlweb_proxy`.
+- **S5 [SRV] Primer despliegue interno** con `release.ps1` (Caddy aún no enruta nada). La copia previa se omite (no hay
+  versión anterior). ⏸ Health interno, tabla del punto 10, `docker stats`, logs y `nslookup`.
+- **S6 [SRV] Copias:** scripts y timers, `age`, primera copia manual y `restore-test`, tarea en el PC y Backups de Hetzner
+  activados. ⏸ Descifrar una copia en el PC y restaurarla en un Docker local. A partir de aquí `deploy.sh` exige la copia previa.
+
+### Fase C: único cambio en Rotten Odds
+
+- **R1 [RO]** — **Requisitos previos:** (1) existen `controlweb_proxy` y `/opt/caddy-sites` (vacía); (2) **se ha comprobado que
+  existe la primera copia de Hetzner** del servidor (panel de Hetzner → Backups); (3) la copia local de Rotten Odds está hecha.
+  Cambio en un PR: las 2 líneas del Caddyfile + volumen `/opt/caddy-sites` + red externa `controlweb_proxy` con
+  `ipv4_address: 10.77.0.10` + nota en su DEPLOY.md. Validar antes de fusionar con `caddy validate` en un contenedor desechable y
+  `docker compose config -q`. Provoca un corte de ~2–5 s al recrear caddy (en horas tranquilas). Comprobar el health de Rotten
+  Odds, `ip route` de Caddy (ruta por defecto sin cambios) y `nslookup api` / `nslookup controlweb-app` desde Caddy.
+  Deshacer: `deploy.sh rollback` **y** `git revert`. ⏸ 24 h observando Rotten Odds antes de seguir.
+
+### Fase D: exposición
+
+- **S7 [CF + SRV]:** registro A `status-api` → `<IP_PUBLICA_VPS>` en **DNS only**; `sudo caddy-install.sh`. Comprobar certificado
+  y cabeceras. Deshacer: borrar el fragmento y `caddy reload`.
+- **S8:** alta de los tres sitios, regla WAF si S0 la pidió, heartbeat, Worker opcional y `POST /api/alerts/test`.
+- **S9 ⏸ Batería final:** health `UP`; Swagger, `/v3/api-docs` y `/actuator/env` → 404; 6 logins erróneos → 5×401 y luego 429 con
+  `Retry-After`; lo mismo cambiando `X-Forwarded-For` (sigue el 429); CORS de `/api/public/status` con el origen del portfolio
+  (permitido) y con otro (no); `/api/sites` sin cabecera CORS desde el portfolio; `sudo reboot` (todo vuelve solo, firewall
+  incluido); imagen rota a propósito (rollback automático); `deploy.sh rollback`; `restore-test`.
+- **S10 tras una semana:** `docker stats` y OOM/reinicios, swap usado (~0), tamaño de copias y de `checks`, siete copias
+  verificadas (y las del PC), contadores `CW-EGRESS-DENY`, falsos positivos, heartbeat, caducidad del certificado, health de Rotten
+  Odds, número de 429, log de retención a las 04:45 y PR de Dependabot.
+
+## 14. Riesgos
+
+1. Un fragmento de Caddy roto + reinicio tumba Rotten Odds: solo se instala con `caddy-install.sh`.
+2. Rotten Odds pasa a depender de `controlweb_proxy`: documentado en su DEPLOY.md; la red solo se borra tras revertir R1.
+3. Trampas binarias de PowerShell 5.1 (`docker save |`, `ssh >`).
+4. Los logs de Docker no rotan por defecto (también en Rotten Odds).
+5. El grupo `docker` equivale a root: los permisos de `.env.prod` protegen de errores, no de un jose comprometido.
+6. El login puede bloquearse con muchas IP (ver punto 1); salida: SSH y reinicio.
+
+## 15. Opcional y aparte (Rotten Odds, fuera de este plan)
+
+Mover su `backup.sh` a una ruta propiedad de root (su servicio de systemd lo ejecuta como root desde una ruta escribible por
+jose), rotación de logs en su Compose y valorar construir fuera del servidor.
