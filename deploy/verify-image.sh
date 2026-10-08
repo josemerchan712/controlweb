@@ -12,6 +12,14 @@ native() { if command -v cygpath > /dev/null 2>&1; then cygpath -m "$1"; else ec
 
 image=${1:?usage: deploy/verify-image.sh <image>}
 failures=0
+# trim <text>: removes CRs and the whitespace (spaces, tabs, blank lines) around the text, so the formatting of the
+# docker output never decides a check (VerifyScriptsTest runs this script against a fake docker).
+trim() {
+  local s=${1//$'\r'/}
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
 fail() { echo "FAIL: $*" >&2; failures=$((failures + 1)); }
 ok() { echo "ok:   $*"; }
 
@@ -32,7 +40,12 @@ fi
 if grep -qE '^app/' "$work/files.txt"; then ok "the application lives in /app"; else fail "/app is missing"; fi
 
 # --- the jar: compiled classes only ---
-PY=$(command -v python3 || command -v python)
+# A working Python: on Windows `python3` can be the Microsoft Store shim, so each candidate is really tried.
+PY=""
+for candidate in python python3; do
+  if command -v "$candidate" > /dev/null 2>&1 && "$candidate" -c 'import zipfile' > /dev/null 2>&1; then PY=$candidate; break; fi
+done
+[ -n "$PY" ] || { echo "FAIL: no working python found" >&2; exit 1; }
 docker cp "$cid:/app/application.jar" "$(native "$work/application.jar")" > /dev/null
 "${PY}" - "$(native "$work/application.jar")" <<'PYEOF' || failures=$((failures + 1))
 import sys, zipfile
@@ -46,18 +59,19 @@ print('ok:   the application jar has %d entries: compiled classes and resources 
 PYEOF
 
 # --- configuration ---
-user=$(docker inspect --format '{{.Config.User}}' "$image")
+user=$(trim "$(docker inspect --format '{{.Config.User}}' "$image")")
 case "$user" in
   ''|0|0:*|root|root:*) fail "the image runs as root (User='$user')" ;;
   *) ok "runs as user $user" ;;
 esac
-if [ "$(docker inspect --format '{{if .Config.Healthcheck}}yes{{end}}' "$image")" = yes ]; then ok "has a HEALTHCHECK"; else fail "no HEALTHCHECK"; fi
+if [ "$(trim "$(docker inspect --format '{{if .Config.Healthcheck}}yes{{end}}' "$image")")" = yes ]; then ok "has a HEALTHCHECK"; else fail "no HEALTHCHECK"; fi
 if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$image" | grep -qiE '(PASSWORD|SECRET|TOKEN|API_?KEY|CREDENTIAL)'; then
   fail "an environment variable of the image looks like a secret"
 else
   ok "no secret-looking environment variable in the image"
 fi
-profile=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$image" | grep '^SPRING_PROFILES_ACTIVE=' || true)
+profile=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$image" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep '^SPRING_PROFILES_ACTIVE=' || true)
+profile=$(trim "$profile")
 [ "$profile" = "SPRING_PROFILES_ACTIVE=prod" ] && ok "default profile is prod" || fail "default profile is not prod ($profile)"
 
 echo "size: $(docker image inspect --format '{{.Size}}' "$image" | awk '{printf "%.0f MB", $1/1000000}')"

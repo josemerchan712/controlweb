@@ -5,11 +5,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.yaml.snakeyaml.Yaml;
 
 /** Guards the CI definition: read-only, no secrets, every action pinned to a commit, Dependabot configured. */
 class CiWorkflowTest {
@@ -62,6 +66,27 @@ class CiWorkflowTest {
 		assertThat(config).contains("package-ecosystem: maven").contains("package-ecosystem: github-actions")
 				.contains("package-ecosystem: docker\n").contains("package-ecosystem: docker-compose");
 		assertThat(config.split("interval: weekly", -1)).hasSize(5);
+	}
+
+	@Test
+	@DisplayName("Dependabot ignores MAJOR versions of postgres (data format) and eclipse-temurin (Java 21 LTS), and nothing else")
+	@SuppressWarnings("unchecked")
+	void dependabotIgnoresDatabaseAndJavaMajors() throws IOException {
+		Map<String, Object> config = new Yaml().load(read(DEPENDABOT));
+		Map<String, List<Map<String, Object>>> ignoresByEcosystem = new HashMap<>();
+		for (Map<String, Object> update : (List<Map<String, Object>>) config.get("updates")) {
+			ignoresByEcosystem.put((String) update.get("package-ecosystem"),
+					(List<Map<String, Object>>) update.getOrDefault("ignore", List.of()));
+		}
+
+		assertThat(ignoresByEcosystem.get("docker-compose")).hasSize(1);
+		assertThat(ignoresByEcosystem.get("docker-compose").get(0)).containsEntry("dependency-name", "postgres")
+				.containsEntry("update-types", List.of("version-update:semver-major"));
+		assertThat(ignoresByEcosystem.get("docker")).hasSize(1);
+		assertThat(ignoresByEcosystem.get("docker").get(0)).containsEntry("dependency-name", "eclipse-temurin")
+				.containsEntry("update-types", List.of("version-update:semver-major"));
+		assertThat(ignoresByEcosystem.get("maven")).isEmpty();
+		assertThat(ignoresByEcosystem.get("github-actions")).isEmpty();
 	}
 
 	@Test

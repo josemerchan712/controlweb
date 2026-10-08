@@ -383,6 +383,17 @@ docker exec $C wget -q -O - http://127.0.0.1:8080/actuator/health              #
 docker exec $C wget -q -O /dev/null http://127.0.0.1:8080/actuator/env         # falla (404)
 ```
 
+*Los scripts de comprobación se prueban sin Docker* (`VerifyScriptsTest`): se ejecutan contra un `docker` falso que contesta como el
+real, y comprueban que el formato de la salida (un espacio al final o al principio, líneas en blanco, fin de línea CRLF, otro orden de
+los nombres) nunca decide el resultado. Un fallo real de CI se debió a eso: la lista de redes empezaba por un espacio. Ojo con un matiz
+de Windows: el Git Bash de Windows quita el `\r` dentro de `$(...)`, así que ahí el CRLF no se nota y por eso el test también rellena con
+espacios, que sí sobreviven; en Linux (CI) se notan ambos. Cada comparación usa `trim`/`words`, y `verify-image.sh` elige el primer
+Python que funcione de verdad (en Windows `python3` puede ser el atajo de la Microsoft Store).
+
+*Dependabot:* ignora las versiones mayores de `postgres` (16 → 18 cambia el formato en disco y la ubicación del directorio de datos de la
+imagen: exige una migración planificada con dump/restore) y de `eclipse-temurin` (el proyecto es Java 21 LTS; la 24 no es LTS).
+Las versiones menores y los parches de ambos siguen llegando.
+
 *CI (`job image`):* construye la imagen **sin publicarla** y sin secretos (las credenciales se generan al azar dentro del job y no se
 imprimen), con `contents: read` y las acciones fijadas por SHA; ejecuta `verify-image.sh`, levanta el stack real
 (`compose.prod.yml` con el perfil `prod` y un PostgreSQL de prueba) hasta que está sano, comprueba en el log que el perfil activo es

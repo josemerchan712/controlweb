@@ -4,20 +4,35 @@
 #   deploy/verify-container.sh <container-name-or-id>
 #
 # Every line is a plain `docker inspect` / `docker exec` check you can also run by hand; docs/DESPLIEGUE.md lists them.
-# Exit status 0 = everything as designed.
+# Exit status 0 = everything as designed. The comparisons ignore formatting: surrounding spaces, blank lines, CRLF line
+# endings and the order of a list of names never make a check fail (VerifyScriptsTest runs this script against a fake docker).
 set -uo pipefail
 export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'   # Git Bash on Windows must not rewrite /proc/... or /dev/null
 
 container=${1:?usage: deploy/verify-container.sh <container>}
 failures=0
 
-inspect() { docker inspect --format "$1" "$container" 2>/dev/null; }
+# trim <text>: removes CRs and the whitespace (spaces, tabs, blank lines) around the text.
+trim() {
+  local s=${1//$'\r'/}
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+# words: reads text on stdin and prints its words sorted and joined by one space, whatever separated them before.
+words() { tr -s '[:space:]' '\n' | sed '/^$/d' | sort | paste -sd' ' -; }
+
+inspect() { trim "$(docker inspect --format "$1" "$container" 2>/dev/null)"; }
 
 expect() { # expect <description> <expected> <actual>
-  if [ "$2" = "$3" ]; then echo "ok:   $1 = $3"; else echo "FAIL: $1: expected '$2' but found '$3'" >&2; failures=$((failures + 1)); fi
+  local actual
+  actual=$(trim "$3")
+  if [ "$2" = "$actual" ]; then echo "ok:   $1 = $actual"; else echo "FAIL: $1: expected '$2' but found '$actual'" >&2; failures=$((failures + 1)); fi
 }
 expect_contains() { # expect_contains <description> <needle> <actual>
-  case "$3" in *"$2"*) echo "ok:   $1 contains $2" ;; *) echo "FAIL: $1: '$3' does not contain '$2'" >&2; failures=$((failures + 1)) ;; esac
+  local actual
+  actual=$(trim "$3")
+  case "$actual" in *"$2"*) echo "ok:   $1 contains $2" ;; *) echo "FAIL: $1: '$actual' does not contain '$2'" >&2; failures=$((failures + 1)) ;; esac
 }
 
 # --- as configured (docker inspect) ---
@@ -39,7 +54,7 @@ expect_contains "tmpfs /tmp options" "noexec" "$(inspect '{{json .HostConfig.Tmp
 ports=$(inspect '{{json .HostConfig.PortBindings}}')
 case "$ports" in '{}'|'null') echo "ok:   no published port" ;; *) echo "FAIL: published ports: $ports" >&2; failures=$((failures + 1)) ;; esac
 expect "networks" "controlweb_db controlweb_egress controlweb_proxy" \
-  "$(inspect '{{range $name, $net := .NetworkSettings.Networks}}{{$name}} {{end}}' | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/ $//')"
+  "$(inspect '{{range $name, $net := .NetworkSettings.Networks}}{{$name}} {{end}}' | words)"
 expect "IP on the proxy network" "10.77.0.20" "$(inspect '{{(index .NetworkSettings.Networks "controlweb_proxy").IPAddress}}')"
 
 # --- state ---
