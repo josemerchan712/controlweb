@@ -1,0 +1,76 @@
+# Production (profile "prod"). Contains NO secrets and no environment-specific values: those come from the environment
+# (JWT_SECRET, ADMIN_PASSWORD, DB_PASSWORD, TRUSTED_PROXY_ADDRESSES, CORS_*, HEARTBEAT_URL, TELEGRAM_*, ...).
+# ProductionSettingsValidator refuses to start this profile with developer settings (see docs/DESPLIEGUE.md).
+
+spring:
+  jpa:
+    show-sql: false
+  datasource:
+    hikari:
+      maximum-pool-size: 5       # one small PostgreSQL shared with nothing else; 5 is plenty for this workload
+      minimum-idle: 1
+  flyway:
+    # Migrations only add things, so the previous image can still start on a newer schema (rollback).
+    ignore-migration-patterns: "*:future"
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+
+server:
+  shutdown: graceful
+  error:
+    include-message: never
+    include-binding-errors: never
+    include-stacktrace: never
+    include-exception: false
+
+app:
+  checker:
+    allow-private-hosts: false     # SSRF guard on; the egress firewall is the second layer
+  scheduler:
+    enabled: true
+  retention:
+    enabled: true
+    days: ${RETENTION_DAYS:90}
+    cron: "0 45 4 * * *"           # after the 04:15 database backup
+
+# No API documentation in production (also hidden by the reverse proxy).
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+# Actuator: only /actuator/health, status only. env, beans, metrics, loggers, mappings... do not exist.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+      discovery:
+        enabled: false
+  endpoint:
+    health:
+      show-details: never
+      show-components: never
+      probes:
+        enabled: false    # no /actuator/health/liveness|readiness, and no list of health groups in the answer
+
+# Quiet logs: no SQL, no bound parameters, no web or security debugging. Request URLs with query strings and
+# Authorization headers must never reach the logs; keeping these loggers at INFO or above is part of that.
+logging:
+  level:
+    root: INFO
+    org.hibernate.SQL: WARN
+    org.hibernate.orm.jdbc.bind: WARN
+    org.hibernate.orm.jdbc.extract: WARN
+    org.springframework.security: WARN
+    org.springframework.web: WARN
+    org.springframework.web.servlet.DispatcherServlet: WARN
+    org.springframework.jdbc: WARN
+    org.springframework.orm.jpa: WARN
+    org.springframework.transaction: WARN
+    org.apache.tomcat: WARN
+    org.apache.coyote: WARN
+    org.apache.catalina: WARN
+    com.zaxxer.hikari: INFO
+    dev.josemariamerchan.controlweb: INFO

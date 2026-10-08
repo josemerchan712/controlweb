@@ -17,12 +17,16 @@ public final class LogCapture implements AutoCloseable {
 
 	private final Logger logger;
 	private final Level previousLevel;
+	private final boolean levelChanged;
 	private final ListAppender<ILoggingEvent> appender = new ListAppender<>();
 
 	private LogCapture(Logger logger, Level level) {
 		this.logger = logger;
 		this.previousLevel = logger.getLevel();
-		logger.setLevel(level);
+		this.levelChanged = level != null;
+		if (level != null) {
+			logger.setLevel(level);
+		}
 		appender.start();
 		logger.addAppender(appender);
 	}
@@ -34,6 +38,14 @@ public final class LogCapture implements AutoCloseable {
 	/** The root logger: sees every log line of every library, at the given level. */
 	public static LogCapture everything(Level level) {
 		return new LogCapture((Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME), level);
+	}
+
+	/**
+	 * Sees what the application REALLY logs: attaches to the root logger without touching any level, so the levels
+	 * configured by the active profile (for example application-prod.yml) decide what reaches the appender.
+	 */
+	public static LogCapture atConfiguredLevels() {
+		return new LogCapture((Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME), null);
 	}
 
 	public List<ILoggingEvent> events() {
@@ -66,6 +78,8 @@ public final class LogCapture implements AutoCloseable {
 	@Override
 	public void close() {
 		logger.detachAppender(appender);
-		logger.setLevel(previousLevel);
+		if (levelChanged) {
+			logger.setLevel(previousLevel);
+		}
 	}
 }

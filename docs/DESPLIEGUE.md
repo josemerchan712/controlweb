@@ -301,8 +301,35 @@ check; `false` si la base de datos falla o la app se está parando). Con la base
 avisa por el silencio. El ping va en su propio hilo virtual, como máximo uno en vuelo y uno por `min-interval` (60 s, con el
 `Clock`); una redirección es un fallo y no se sigue; solo se registra el cambio de estado (un WARN al empezar a fallar, un INFO al
 recuperarse) y nunca la URL ni el mensaje de una excepción. `HEARTBEAT_URL` es un secreto: https (o http solo a localhost),
-sin credenciales embebidas, y un valor inválido impide arrancar sin repetirlo. En healthchecks.io se configura el período del
-check en ~5 min con una gracia de ~5 min, y la integración con Telegram del propio servicio.
+sin credenciales embebidas, y un valor inválido impide arrancar sin repetirlo. En healthchecks.io se configura el check con un
+**periodo de 1 minuto y una gracia de 3 a 5 minutos** (el heartbeat sale como mucho una vez por minuto) y la integración con
+Telegram del propio servicio. La gracia evita falsos avisos cuando un despliegue reinicia la app: arrancar la JVM, las migraciones
+de Flyway y el primer ciclo tardan del orden de un minuto, y un `rollback` automático puede sumar otro.
+
+**Implementación de C5 (perfil `prod`):** `ProductionSettingsValidator` (un `EnvironmentPostProcessor`, como el de seguridad)
+se niega a arrancar con el perfil `prod` si ocurre cualquiera de estas cosas. Se informan **todas a la vez** y **por nombre,
+nunca por valor** (varias son secretos):
+1. `TRUSTED_PROXY_ADDRESSES` vacío (sin ella todos los clientes comparten la IP de Caddy y 5 fallos bloquearían a todo el mundo).
+2. `app.checker.allow-private-hosts=true`.
+3. API docs o Swagger activados **o no desactivados explícitamente** (springdoc está activo por defecto).
+4. Límites del login más laxos que los de producción (más fichas o recarga más rápida): el perfil `test` no puede colarse.
+   El techo es `LoginRateLimitProperties.defaults()`, y un test comprueba que coincide con los valores por defecto reales.
+5. `CORS_ALLOWED_ORIGINS` o `PUBLIC_CORS_ALLOWED_ORIGINS` con `http://` o con `localhost`/`127.x`/`[::1]`/`0.0.0.0`.
+6. `JWT_SECRET`, `ADMIN_PASSWORD` o `DB_PASSWORD` vacíos o iguales a un valor de ejemplo (lista de marcadores; un test comprueba
+   que todo valor de `.env.example` está en ella). Un `JWT_SECRET` de un solo byte repetido (32 ceros) también se rechaza.
+7. `HEARTBEAT_URL` definida pero que no sea https.
+
+`application-prod.yml` no lleva secretos: desactiva Swagger/api-docs, expone solo `/actuator/health` sin detalles ni sondas,
+fija el pool a 5 conexiones, `*:future` en Flyway, errores sin mensaje ni traza, apagado ordenado, retención a las 04:45 y
+niveles de log silenciosos (sin SQL ni parámetros, sin depuración de Spring Security, Spring Web ni Tomcat). Tests: un test por
+condición (`ProductionSettingsValidatorTest`), arranque real de la aplicación con los ficheros reales (`ProductionProfileStartupTest`,
+incluido `prod,test` y `prod,dev`), la aplicación completa con perfil `prod` y PostgreSQL (`ProdProfileIntegrationTest`: actuator,
+Swagger, niveles de log y que ninguna URL con query string ni cabecera `Authorization` llega a los logs) y un guardián de los YAML
+(`ConfigFilesGuardianTest`).
+
+Matiz sobre «404»: con el perfil `prod`, `/actuator/env`, `/actuator/beans`, etc. dan **404 al administrador** (no existen) y **401 a
+quien no lleva token**, igual que cualquier otra ruta desconocida, de modo que nada revela qué existe. Desde fuera, el fragmento de
+Caddy devuelve 404 a esas rutas.
 
 ## 13. Pasos
 
@@ -316,7 +343,7 @@ check en ~5 min con una gracia de ~5 min, y la integración con Telegram del pro
 | **C2b [CW]** ✅ | Rangos de documentación y benchmarking en `HostSafetyValidator` | Hecho (ver requisitos de C5) | revert |
 | **C3 [CW]** ✅ | Heartbeat opcional (`app.heartbeat.url`, vacío = apagado) | Hecho: ver «Implementación de C3» | revert |
 | **C4 [CW]** *(omitido por ahora; ver S0)* | Mensaje "desafío de Cloudflare" | Tests | revert |
-| **C5 [CW]** | `application-prod.yml`, protección `prod`, Flyway `*:future`, cron de retención | Test del perfil (ver requisitos) | revert |
+| **C5 [CW]** ✅ | `application-prod.yml`, protecciones del perfil `prod`, Flyway `*:future`, cron de retención | Hecho: ver «Implementación de C5» | revert |
 | **C6 [CW]** | Dockerfile, `compose.prod.yml`, job de CI de la imagen | ⏸ En local con límite de 512 MiB; anotar RSS tras 10 min | revert |
 | **C7 [CW]** | `deploy/` completo + shellcheck en CI | `bash -n`, shellcheck, revisión | revert |
 

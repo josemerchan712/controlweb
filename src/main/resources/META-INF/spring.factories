@@ -1,2 +1,3 @@
 org.springframework.boot.diagnostics.FailureAnalyzer=dev.josemariamerchan.controlweb.config.InvalidConfigurationFailureAnalyzer
-org.springframework.boot.EnvironmentPostProcessor=dev.josemariamerchan.controlweb.config.SecuritySettingsValidator
+org.springframework.boot.EnvironmentPostProcessor=dev.josemariamerchan.controlweb.config.SecuritySettingsValidator,\
+  dev.josemariamerchan.controlweb.config.ProductionSettingsValidator

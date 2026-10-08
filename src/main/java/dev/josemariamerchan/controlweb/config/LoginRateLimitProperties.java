@@ -49,6 +49,15 @@ public record LoginRateLimitProperties(
 		}
 	}
 
+	/**
+	 * The production limits (the {@code @DefaultValue}s above). The {@code prod} profile refuses to start with anything
+	 * looser, so the very generous limits of the test suite cannot reach production.
+	 */
+	public static LoginRateLimitProperties defaults() {
+		return new LoginRateLimitProperties(10, Duration.ofSeconds(6), 5, Duration.ofMinutes(3), 20, Duration.ofMinutes(3), 60,
+				Duration.ofSeconds(1), 10_000);
+	}
+
 	private static void capacity(int value, String name) {
 		if (value < 1 || value > MAX_CAPACITY) {
 			throw invalid(name, "a number between 1 and " + MAX_CAPACITY);

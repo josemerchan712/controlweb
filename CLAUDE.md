@@ -342,6 +342,21 @@ infraestructura** (esquema de redes y subredes, rutas del servidor, nombres de d
 aparece (se escribe `<IP_PUBLICA_VPS>`), pero el resto sí. Requisito anotado para C5: el perfil `prod` no debe arrancar con
 `app.proxy.trusted-addresses` vacío.
 
+## Perfil `prod` (fase 2, paso C5)
+`application-prod.yml` (sin secretos) + `ProductionSettingsValidator`, que con el perfil `prod` impide arrancar (error claro,
+todas las causas a la vez, sin repetir valores) si: `TRUSTED_PROXY_ADDRESSES` está vacío; `allow-private-hosts=true`; las API docs
+o Swagger no están desactivadas explícitamente; los límites del login son más laxos que los de producción
+(`LoginRateLimitProperties.defaults()` es el techo, así el perfil `test` no se cuela); los orígenes CORS tienen `http://` o
+`localhost`; `JWT_SECRET`/`ADMIN_PASSWORD`/`DB_PASSWORD` están vacíos o son valores de ejemplo (`isPlaceholder`; un test exige que
+todo valor de `.env.example` lo sea); o `HEARTBEAT_URL` no es https. Actuator: solo `/actuator/health` (sin detalles ni sondas); lo
+demás da 404 al administrador y 401 sin token. Logs silenciosos (sin SQL, sin depuración de Spring Security/Web/Tomcat).
+- Si añades un ajuste que en producción deba ser distinto que en desarrollo, añádelo al validador **y** a su test.
+- `ConfigFilesGuardianTest` falla si un YAML de `src/main/resources` contiene algo que parezca un secreto literal; los secretos
+  son `${NOMBRE:}` con valor por defecto vacío. `RestoreLoggingLevels` (extensión de test) devuelve los niveles de log tras un test
+  que arranca el perfil `prod`, para no debilitar tests posteriores que buscan secretos en los logs.
+- Mutaciones verificadas: desactivar cada una de las 7 comprobaciones, el filtro por perfil, el registro del validador, y estropear
+  `application-prod.yml` (exponer actuator, mostrar detalles, niveles DEBUG, sondas, Swagger, un secreto literal) hacen fallar tests.
+
 ## Heartbeat (fase 2, paso C3)
 Opcional (`app.heartbeat.url` / `HEARTBEAT_URL`, vacío = apagado). Tras cada ciclo del scheduler que se ejecutó
 (`CheckRunner.runCycle()` devuelve `true`), `CheckScheduler` llama a `Heartbeat.beat()`, que hace un GET a un servicio externo
