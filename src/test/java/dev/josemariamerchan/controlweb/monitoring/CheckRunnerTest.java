@@ -356,4 +356,41 @@ class CheckRunnerTest {
 		assertThat(guard.size()).isZero();
 		verify(service, never()).runCheck(eq(2L));
 	}
+
+	// ---- did the cycle run? (the heartbeat is only sent when it did) ----
+
+	@Test
+	@DisplayName("runCycle reports true when the due sites could be loaded, even if none is due")
+	void cycleReportsTrueWhenItRan() {
+		when(service.findDueSiteIds()).thenReturn(List.of());
+
+		assertThat(runner().runCycle()).isTrue();
+	}
+
+	@Test
+	@DisplayName("a failing check does not make the cycle report failure: the scheduler itself is working")
+	void failingCheckStillCountsAsACycle() {
+		when(service.findDueSiteIds()).thenReturn(List.of(1L));
+		when(service.runCheck(anyLong())).thenThrow(new IllegalStateException("boom"));
+
+		assertThat(runner().runCycle()).isTrue();
+	}
+
+	@Test
+	@DisplayName("runCycle reports false when the due sites cannot be loaded (database down): the monitor is NOT working")
+	void cycleReportsFalseWhenTheDatabaseFails() {
+		when(service.findDueSiteIds()).thenThrow(new IllegalStateException("database down"));
+
+		assertThat(runner().runCycle()).isFalse();
+	}
+
+	@Test
+	@DisplayName("runCycle reports false once the runner has been shut down")
+	void cycleReportsFalseAfterShutdown() {
+		CheckRunner runner = runner();
+		runner.shutdown();
+
+		assertThat(runner.runCycle()).isFalse();
+		verify(service, never()).findDueSiteIds();
+	}
 }

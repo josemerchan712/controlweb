@@ -98,6 +98,19 @@ class FailFastStartupTest {
 	}
 
 	@Test
+	@DisplayName("an invalid HEARTBEAT_URL prevents startup and its (secret) value is never echoed")
+	void invalidHeartbeatUrl(CapturedOutput output) {
+		assertThatThrownBy(() -> start("app.jwt.secret=" + SECRET_32_BYTES, "app.admin.email=admin@example.com",
+				"app.admin.password=long-enough-password", "app.heartbeat.url=http://remote.example.com/SECRET-ping-id-123"))
+				.hasRootCauseInstanceOf(InvalidConfigurationException.class);
+
+		assertThat(output.getAll())
+				.contains("APPLICATION FAILED TO START")
+				.contains("HEARTBEAT_URL is not valid")
+				.doesNotContain("SECRET-ping-id-123").doesNotContain("remote.example.com");
+	}
+
+	@Test
 	@DisplayName("a wildcard in CORS_ALLOWED_ORIGINS prevents startup")
 	void wildcardCors(CapturedOutput output) {
 		assertThatThrownBy(() -> start("app.jwt.secret=" + SECRET_32_BYTES, "app.admin.email=admin@example.com",

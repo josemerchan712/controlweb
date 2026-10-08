@@ -295,6 +295,15 @@ Aviso externo: heartbeat de ControlWeb a healthchecks.io (Hobbyist, 20 checks, s
 registrarse; integración con Telegram) con la URL secreta solo en `.env.prod`, más un Worker de Cloudflare con cron
 opcional. UptimeRobot Free: 50 monitores a 5 min, uso no comercial y Telegram probablemente solo de pago.
 
+**Implementación de C3 (heartbeat):** `CheckScheduler` llama a `Heartbeat.beat()` **solo después de un ciclo que se ejecutó**
+(`CheckRunner.runCycle()` devuelve `true` cuando pudo cargar los sitios pendientes, aunque no hubiera ninguno y falle algún
+check; `false` si la base de datos falla o la app se está parando). Con la base de datos caída no hay ping y healthchecks.io
+avisa por el silencio. El ping va en su propio hilo virtual, como máximo uno en vuelo y uno por `min-interval` (60 s, con el
+`Clock`); una redirección es un fallo y no se sigue; solo se registra el cambio de estado (un WARN al empezar a fallar, un INFO al
+recuperarse) y nunca la URL ni el mensaje de una excepción. `HEARTBEAT_URL` es un secreto: https (o http solo a localhost),
+sin credenciales embebidas, y un valor inválido impide arrancar sin repetirlo. En healthchecks.io se configura el período del
+check en ~5 min con una gracia de ~5 min, y la integración con Telegram del propio servicio.
+
 ## 13. Pasos
 
 ### Fase A: solo este repo
@@ -305,7 +314,7 @@ opcional. UptimeRobot Free: 50 monitores a 5 min, uso no comercial y Telegram pr
 | **C1 [CW]** ✅ | Rate limiting + `ClientIpResolver` | Hecho: ver «Implementación de C1» | revert |
 | **C2 [CW]** ✅ | Tests SSRF de límites (`HostSafetyBoundaryTest`) | Hecho: 47 casos, con mutaciones comprobadas | revert |
 | **C2b [CW]** ✅ | Rangos de documentación y benchmarking en `HostSafetyValidator` | Hecho (ver requisitos de C5) | revert |
-| **C3 [CW]** | Heartbeat opcional (`app.heartbeat.url`, vacío = apagado) | Test con servidor local; la URL nunca en logs | revert |
+| **C3 [CW]** ✅ | Heartbeat opcional (`app.heartbeat.url`, vacío = apagado) | Hecho: ver «Implementación de C3» | revert |
 | **C4 [CW]** *(omitido por ahora; ver S0)* | Mensaje "desafío de Cloudflare" | Tests | revert |
 | **C5 [CW]** | `application-prod.yml`, protección `prod`, Flyway `*:future`, cron de retención | Test del perfil (ver requisitos) | revert |
 | **C6 [CW]** | Dockerfile, `compose.prod.yml`, job de CI de la imagen | ⏸ En local con límite de 512 MiB; anotar RSS tras 10 min | revert |

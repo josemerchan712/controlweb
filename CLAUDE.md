@@ -342,6 +342,15 @@ infraestructura** (esquema de redes y subredes, rutas del servidor, nombres de d
 aparece (se escribe `<IP_PUBLICA_VPS>`), pero el resto sí. Requisito anotado para C5: el perfil `prod` no debe arrancar con
 `app.proxy.trusted-addresses` vacío.
 
+## Heartbeat (fase 2, paso C3)
+Opcional (`app.heartbeat.url` / `HEARTBEAT_URL`, vacío = apagado). Tras cada ciclo del scheduler que se ejecutó
+(`CheckRunner.runCycle()` devuelve `true`), `CheckScheduler` llama a `Heartbeat.beat()`, que hace un GET a un servicio externo
+(p. ej. healthchecks.io) en su propio hilo virtual: como máximo uno en vuelo y uno por `min-interval` (60 s), sin seguir
+redirecciones, sin que un fallo escape. **La URL es un secreto**: solo por entorno, validada al arrancar (https, o http a localhost),
+nunca en logs ni en mensajes de error; solo se registra el cambio de estado. Con la base de datos caída no hay ping: el silencio es
+la alarma. Mutaciones verificadas: quitar el límite de frecuencia, registrar la URL, latir sin ciclo, seguir redirecciones y quitar
+la guarda de un solo ping en vuelo hacen fallar tests.
+
 ## Rate limiting del login (fase 2, paso C1)
 `POST /api/auth/login` está limitado con **token buckets propios** (`auth/ratelimit`, sin dependencias: ~100 líneas, todo el
 tiempo sale del `Clock`; se descartó Bucket4j porque no aportaba nada que justificara una dependencia). Cuatro cubos

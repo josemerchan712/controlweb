@@ -190,6 +190,8 @@ Ningún valor real está en el repositorio; `.env.example` solo trae marcadores.
 | `PUBLIC_CORS_ALLOWED_ORIGINS` | no | Orígenes exactos que pueden leer `/api/public/status` desde un navegador (tu portfolio) |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | no | **Las dos** hacen falta para enviar; si falta alguna, los avisos solo se escriben en el log |
 | `RETENTION_DAYS` | no (90) | Días de histórico de checks que se conservan. Mínimo 30 |
+| `TRUSTED_PROXY_ADDRESSES` | no | IP exactas (sin rangos ni nombres) del proxy inverso en el que se confía para `X-Forwarded-For`; vacío = nunca se lee esa cabecera |
+| `HEARTBEAT_URL` | no | URL secreta de un servicio externo (p. ej. healthchecks.io) a la que se avisa tras cada ciclo del scheduler; si dejan de llegar avisos, el servicio te alerta. Vacío = apagado |
 
 Ajustes finos (intervalos, concurrencia, reintentos, cron de retención…) están comentados en `src/main/resources/application.yml`.
 

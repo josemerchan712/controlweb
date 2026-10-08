@@ -36,6 +36,12 @@ app:
     # Exact IPs (no ranges, no names) of the reverse proxies whose X-Forwarded-For is believed. Empty = never read it.
     # Production: the fixed IP of Caddy in the shared network (see docs/DESPLIEGUE.md).
     trusted-addresses: ${TRUSTED_PROXY_ADDRESSES:}
+  heartbeat:
+    # Optional "I am alive" ping to an external service (e.g. healthchecks.io), sent after each scheduler cycle that ran.
+    # The URL is a SECRET: only from the environment, never logged. Empty = off.
+    url: ${HEARTBEAT_URL:}
+    min-interval: 60s       # at most one ping per this time
+    timeout: 5s
   login-rate-limit:
     # POST /api/auth/login. Each limit is a token bucket: `capacity` tokens, one more every `refill`.
     ip-attempts: 10            # attempts of any kind one client may make in a burst ...

@@ -50,10 +50,16 @@ public class CheckRunner {
 		this.permits = new Semaphore(properties.maxConcurrency());
 	}
 
-	/** Checks every site that is due and waits for all of those checks to finish. Never throws. */
-	public void runCycle() {
+	/**
+	 * Checks every site that is due and waits for all of those checks to finish. Never throws.
+	 *
+	 * @return whether the cycle really ran: {@code true} once the due sites could be loaded (even if none was due, and
+	 *         whatever happened to each check); {@code false} if the database failed or the runner is shutting down.
+	 *         The heartbeat is only sent for a cycle that ran.
+	 */
+	public boolean runCycle() {
 		if (!accepting.get()) {
-			return;
+			return false;
 		}
 		List<Long> due;
 		try {
@@ -61,7 +67,7 @@ public class CheckRunner {
 		}
 		catch (RuntimeException ex) {
 			logFailure("Could not load the sites that are due", ex);
-			return;
+			return false;
 		}
 
 		List<Future<?>> running = new ArrayList<>();
@@ -79,6 +85,7 @@ public class CheckRunner {
 			}
 		}
 		awaitAll(running);
+		return true;
 	}
 
 	/**

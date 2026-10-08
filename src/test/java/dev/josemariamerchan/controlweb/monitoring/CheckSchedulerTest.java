@@ -22,6 +22,7 @@ import org.springframework.scheduling.config.ScheduledTask;
 import org.springframework.scheduling.config.Task;
 
 import dev.josemariamerchan.controlweb.config.SchedulerProperties;
+import dev.josemariamerchan.controlweb.heartbeat.Heartbeat;
 import dev.josemariamerchan.controlweb.monitoring.scheduler.CheckScheduler;
 import dev.josemariamerchan.controlweb.monitoring.service.CheckRunner;
 
@@ -36,6 +37,11 @@ class CheckSchedulerTest {
 		@Bean
 		CheckRunner runner() {
 			return mock(CheckRunner.class);
+		}
+
+		@Bean
+		Heartbeat heartbeat() {
+			return mock(Heartbeat.class);
 		}
 	}
 
@@ -84,9 +90,45 @@ class CheckSchedulerTest {
 	void scheduledMethodRunsACycle() {
 		CheckRunner mockRunner = mock(CheckRunner.class);
 
-		new CheckScheduler(mockRunner).runDueChecks();
+		new CheckScheduler(mockRunner, mock(Heartbeat.class)).runDueChecks();
 
 		org.mockito.Mockito.verify(mockRunner).runCycle();
+	}
+
+	@Test
+	@DisplayName("after a cycle that ran, the scheduler beats the heartbeat")
+	void heartbeatAfterACycle() {
+		CheckRunner mockRunner = mock(CheckRunner.class);
+		Heartbeat heartbeat = mock(Heartbeat.class);
+		org.mockito.Mockito.when(mockRunner.runCycle()).thenReturn(true);
+
+		new CheckScheduler(mockRunner, heartbeat).runDueChecks();
+
+		org.mockito.Mockito.verify(heartbeat).beat();
+	}
+
+	@Test
+	@DisplayName("when the cycle could not run (database down, shutting down) there is NO heartbeat: silence is the alarm")
+	void noHeartbeatWhenTheCycleDidNotRun() {
+		CheckRunner mockRunner = mock(CheckRunner.class);
+		Heartbeat heartbeat = mock(Heartbeat.class);
+		org.mockito.Mockito.when(mockRunner.runCycle()).thenReturn(false);
+
+		new CheckScheduler(mockRunner, heartbeat).runDueChecks();
+
+		org.mockito.Mockito.verifyNoInteractions(heartbeat);
+	}
+
+	@Test
+	@DisplayName("a heartbeat that throws can never stop the scheduler")
+	void heartbeatFailureIsContained() {
+		CheckRunner mockRunner = mock(CheckRunner.class);
+		Heartbeat heartbeat = mock(Heartbeat.class);
+		org.mockito.Mockito.when(mockRunner.runCycle()).thenReturn(true);
+		org.mockito.Mockito.doThrow(new IllegalStateException("boom")).when(heartbeat).beat();
+
+		org.assertj.core.api.Assertions.assertThatCode(() -> new CheckScheduler(mockRunner, heartbeat).runDueChecks())
+				.doesNotThrowAnyException();
 	}
 
 	// ---- SchedulerProperties ----
