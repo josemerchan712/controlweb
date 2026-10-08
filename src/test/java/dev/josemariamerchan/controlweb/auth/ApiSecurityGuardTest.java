@@ -89,7 +89,8 @@ class ApiSecurityGuardTest {
 
 		assertThat(found).contains("POST /api/auth/login", "GET /api/auth/me", "GET /api/sites", "POST /api/sites",
 				"GET /api/sites/{id}", "PUT /api/sites/{id}", "DELETE /api/sites/{id}", "POST /api/sites/{id}/check", "GET /api/sites/{siteId}/rules",
-				"PUT /api/sites/{siteId}/rules/{type}", "POST /api/alerts/test");
+				"PUT /api/sites/{siteId}/rules/{type}", "POST /api/alerts/test", "GET /api/status",
+				"GET /api/sites/{siteId}/checks", "GET /api/sites/{siteId}/stats", "GET /api/incidents", "GET /api/incidents/{id}");
 	}
 
 	@Test

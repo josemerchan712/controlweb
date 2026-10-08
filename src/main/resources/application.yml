@@ -64,6 +64,10 @@ app:
     queue-capacity: 100     # alerts waiting to be sent; beyond that they are dropped, never blocking a check
     shutdown-timeout: 10s   # let queued alerts go out when the application stops
     test-interval: 10s      # minimum time between two POST /api/alerts/test
+  api:
+    default-page-size: 50
+    max-page-size: 100        # larger sizes are a 400
+    max-history-range: 90d    # longest from..to accepted by GET /api/sites/{id}/checks (when both are given)
   # Thresholds of the alert rules created for every new site.
   alert-defaults:
     down-consecutive-failures: 2

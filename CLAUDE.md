@@ -44,7 +44,8 @@ docker compose down                # parar la base de datos
 - Paso 4 (checker HTTP + SSL): hecho.
 - Paso 5 (scheduler + comprobación manual): hecho.
 - Paso 6 (motor de reglas, incidencias y eventos + API de reglas): hecho.
-- Paso 7 (alertas por Telegram): hecho. Siguiente: paso 8 (API de lectura: estado, histórico, estadísticas, incidencias).
+- Paso 7 (alertas por Telegram): hecho.
+- Paso 8 (API de lectura: estado, histórico, estadísticas, incidencias): hecho. Siguiente: paso 9 (endpoint público de estado).
 
 ## CRUD de sitios y SSRF (paso 2)
 - `SiteUrlNormalizer` canonicaliza la URL antes de guardar (esquema y host en minúsculas, sin punto final en el host,
@@ -108,6 +109,46 @@ guardarlo también en checks fallidos por HTTP, p. ej. un 503 con certificado v�
 - **Tests** sin WireMock ni archivos de claves: servidores `com.sun.net.httpserver` (HTTP/HTTPS) y certificados EC generados
   en memoria con BouncyCastle (solo `test`): CA de confianza, hoja válida, caducada, aún no válida, host incorrecto y CA
   desconocida (`TestServer`, `TestPki`).
+
+## API de lectura (paso 8)
+Todos los endpoints exigen JWT (el guardián los cubre), son solo `GET`, devuelven **DTOs (records), nunca entidades**, y no
+tienen efectos secundarios (un test comprueba que solo se emiten `SELECT` y que ninguna fila cambia). Los errores son
+`ProblemDetail`: parámetros inválidos → 400 (nunca 500), sitio/incidencia inexistente → 404.
+- **`GET /api/status`**: `{generatedAt, summary{total,up,degraded,down,pending,paused}, sites[]}`. Cada sitio: `id, name, url,
+  active, status, lastCheck{up,statusCode,latencyMs,checkedAt,certExpiresAt}|null, openIncidents[{type,since}]`. Orden estable:
+  nombre (sin distinguir mayúsculas) y luego id. **Estado derivado** (por precedencia): `PAUSED` (inactivo) > `PENDING` (sin
+  checks) > `DOWN` (incidencia DOWN abierta O último check fallido) > `DEGRADED` (incidencia HIGH_LATENCY o SSL_EXPIRING
+  abierta con el sitio arriba) > `UP`. Una incidencia resuelta no cuenta. El "último check" es el más reciente por
+  `checked_at` (desempate por id), no el de mayor id.
+- **Sin N+1, medido**: siempre 3 sentencias sea cual sea el número de sitios (sitios; último check por sitio con
+  `CROSS JOIN LATERAL ... LIMIT 1` sobre `idx_checks_site_checked_at`; incidencias abiertas como filas ligeras). No se usan
+  entidades con proxies perezosos (`CheckQueries`, `OpenIncidentRow`). El test cuenta TODAS las sentencias SQL que pasan por
+  el `DataSource` (`SqlStatementCounter`, un proxy JDBC de test) y exige que 20 sitios cuesten lo mismo que 2.
+- **`GET /api/sites/{id}/checks?from&to&page&size`**: paginado (`{items,page,size,totalElements,totalPages}`), orden FIJO
+  `checked_at DESC, id DESC` (no hay parámetro `sort`). `size` por defecto 50 y máximo 100 (`app.api.max-page-size`):
+  **un `size` mayor es un 400, no se recorta en silencio**; `page` >= 0. `from`/`to` opcionales, ISO-8601 CON zona horaria
+  (`2026-03-01T12:00:00Z` o `...+01:00`; una fecha sin hora o sin zona es 400), ambos inclusivos. `from > to` → 400. El rango
+  `to - from` no puede superar 90 días (`app.api.max-history-range`); **solo se comprueba cuando se dan ambos** (con uno solo
+  es un rango abierto y la paginación acota el coste). Los parámetros se validan ANTES de buscar el sitio (400 antes que 404).
+- **`GET /api/sites/{id}/stats?period=24h|7d|30d`**: `{siteId, period, windowStart, windowEnd, totalChecks, successfulChecks,
+  uptimePercent, avgLatencyMs, p95LatencyMs, firstCheckAt, lastCheckAt}`. **`period` ausente (o vacío) = `24h`**, sin distinguir
+  mayúsculas; cualquier otro valor → 400. Calculado en SQL (`CheckQueries.STATS`) con el `now` del `Clock`: ventana CERRADA
+  `[now - periodo, now]` (un check justo a 24 h está dentro; uno un segundo más viejo, fuera; los futuros no cuentan).
+  `uptimePercent = correctos / TODOS los checks * 100` (los fallidos cuentan en contra); **sin checks → `null` en uptime y
+  latencias, nunca 100 %**; todo fallido → `0.00`. La latencia solo cuenta checks CORRECTOS con `latency_ms`; `p95` con
+  `percentile_cont(0.95)`; redondeo a 2 decimales. `firstCheckAt`/`lastCheckAt` = el rango real que cubren los datos.
+- **`GET /api/incidents?status=open|resolved&siteId&page&size`** y **`GET /api/incidents/{id}`**: mismo límite de paginación,
+  orden `opened_at DESC, id DESC`. `status` sin distinguir mayúsculas (ausente = ambos). Un `siteId` inexistente es un **404**
+  (no una lista vacía). Cada incidencia: `id, siteId, siteName, type, status (OPEN|RESOLVED), openedAt, resolvedAt, ongoing,
+  durationSeconds (null mientras está en curso), details`. Se carga con su sitio en la misma sentencia (`@EntityGraph`).
+- **Índices (V2)**: los de `checks` (`idx_checks_site_checked_at`) y los de `incidents` por sitio ya existían. Faltaba uno:
+  `idx_incidents_opened_at (opened_at DESC, id DESC)` para el listado global (sin él: `Seq Scan` + `Sort` en cada página).
+  **No** se creó un índice parcial para `status=open`: el `EXPLAIN` sobre 40.000 incidencias mostró que PostgreSQL ya usa el
+  índice parcial único de la V1 (`WHERE resolved_at IS NULL`) y solo lee las pocas incidencias abiertas. `ReadIndexesIntegrationTest`
+  lo demuestra (también quitando el índice dentro de una transacción que se revierte).
+- **Tests**: `TestClock` (primario en `TestcontainersConfiguration`) sigue la hora real hasta que un test la fija con `fix(...)`
+  (siempre en el pasado: los tokens se validan contra el mismo reloj). Mutaciones verificadas: contar los fallidos como correctos
+  en el uptime y hacer exclusivo el inicio de la ventana hacen fallar 5 y 3 tests.
 
 ## Alertas por Telegram (paso 7)
 - **`Notifier`** (interfaz, `send(html)` NUNCA lanza; devuelve `SendResult` SENT / NOT_CONFIGURED / FAILED con un detalle seguro).

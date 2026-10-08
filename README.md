@@ -49,6 +49,27 @@ Para generar un `JWT_SECRET` en PowerShell:
 $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b)
 ```
 
+## API (resumen)
+Todo bajo `/api` requiere `Authorization: Bearer <token>` salvo el login. Los errores son `application/problem+json`.
+
+| Endpoint | Descripción |
+|---|---|
+| `POST /api/auth/login` | Devuelve el token JWT |
+| `GET/POST /api/sites`, `GET/PUT/DELETE /api/sites/{id}` | Gestión de sitios |
+| `POST /api/sites/{id}/check` | Comprobación manual inmediata |
+| `GET/PUT /api/sites/{id}/rules[/{type}]` | Reglas de alerta del sitio |
+| `GET /api/status` | Estado de todos los sitios (UP, DEGRADED, DOWN, PENDING, PAUSED) + resumen |
+| `GET /api/sites/{id}/checks?from&to&page&size` | Histórico paginado (más reciente primero; máx. 100 por página; rango ≤ 90 días) |
+| `GET /api/sites/{id}/stats?period=24h\|7d\|30d` | Uptime %, latencia media y p95 |
+| `GET /api/incidents?status&siteId&page&size`, `GET /api/incidents/{id}` | Incidencias |
+| `POST /api/alerts/test` | Mensaje de prueba por Telegram |
+
+```powershell
+$h = @{ Authorization = "Bearer $($login.token)" }
+Invoke-RestMethod -Uri http://localhost:8080/api/status -Headers $h
+Invoke-RestMethod -Uri "http://localhost:8080/api/sites/1/stats?period=7d" -Headers $h
+```
+
 ## Alertas por Telegram
 Opcional. Necesitas **las dos** variables `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` (mira los pasos en `.env.example`).
 Si falta alguna, la app arranca igualmente, te avisa en el log de cuál falta (sin mostrar valores) y las alertas solo se

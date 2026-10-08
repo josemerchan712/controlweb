@@ -29,6 +29,19 @@ public class TestcontainersConfiguration {
 		return POSTGRES;
 	}
 
+	/** Follows the real time unless a test fixes it (see {@link TestClock}); primary, so everything uses it. */
+	@Bean
+	@org.springframework.context.annotation.Primary
+	TestClock testClock() {
+		return new TestClock();
+	}
+
+	/** Lets tests count the SQL statements an endpoint issues (see {@link SqlStatementCounter}). */
+	@Bean
+	static org.springframework.beans.factory.config.BeanPostProcessor sqlStatementCountingPostProcessor() {
+		return SqlStatementCounter.postProcessor();
+	}
+
 	/** Alerts never leave the machine in tests: this primary notifier records them instead. */
 	@Bean
 	@org.springframework.context.annotation.Primary

@@ -18,6 +18,8 @@ import dev.josemariamerchan.controlweb.alert.service.AlertDeliveryException;
 import dev.josemariamerchan.controlweb.alert.service.AlertRateLimitedException;
 import dev.josemariamerchan.controlweb.auth.service.InvalidCredentialsException;
 import dev.josemariamerchan.controlweb.common.net.UnsafeHostException;
+import dev.josemariamerchan.controlweb.common.web.InvalidQueryException;
+import dev.josemariamerchan.controlweb.incident.service.IncidentNotFoundException;
 import dev.josemariamerchan.controlweb.incident.service.InvalidRuleException;
 import dev.josemariamerchan.controlweb.monitoring.service.CheckInProgressException;
 import dev.josemariamerchan.controlweb.site.service.DuplicateSiteException;
@@ -49,8 +51,8 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 		return ProblemDetail.forStatusAndDetail(HttpStatus.UNAUTHORIZED, ex.getMessage());
 	}
 
-	@ExceptionHandler(SiteNotFoundException.class)
-	ProblemDetail handleNotFound(SiteNotFoundException ex) {
+	@ExceptionHandler({ SiteNotFoundException.class, IncidentNotFoundException.class })
+	ProblemDetail handleNotFound(RuntimeException ex) {
 		return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
 	}
 
@@ -76,7 +78,8 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 		return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
 	}
 
-	@ExceptionHandler({ InvalidSiteUrlException.class, UnsafeHostException.class, InvalidRuleException.class })
+	@ExceptionHandler({ InvalidSiteUrlException.class, UnsafeHostException.class, InvalidRuleException.class,
+			InvalidQueryException.class })
 	ProblemDetail handleBadSiteTarget(RuntimeException ex) {
 		return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
 	}
