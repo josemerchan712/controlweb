@@ -342,6 +342,15 @@ infraestructura** (esquema de redes y subredes, rutas del servidor, nombres de d
 aparece (se escribe `<IP_PUBLICA_VPS>`), pero el resto sí. Requisito anotado para C5: el perfil `prod` no debe arrancar con
 `app.proxy.trusted-addresses` vacío.
 
+## Imagen, compose y CI (fase 2, paso C6)
+`Dockerfile` (JDK para compilar, JRE para ejecutar; etiqueta exacta + digest; usuario 10001; HEALTHCHECK con `wget`; contexto en lista
+blanca en `.dockerignore`), `compose.prod.yml` (sin valores secretos: todo `${X:?mensaje}`; app y base de datos endurecidas;
+redes `controlweb_proxy` (externa), `controlweb_db` (interna) y `controlweb_egress`), `deploy/verify-image.sh`,
+`deploy/verify-container.sh`, `deploy/measure-memory.sh` y el job `image` de CI (construye sin publicar y arranca el stack con el
+perfil `prod`). `DockerfileGuardianTest` y `ComposeProdGuardianTest` vigilan los dos ficheros sin Docker. Los comandos `docker inspect`
+que comprueban cada medida están en `docs/DESPLIEGUE.md`. El `-Xmx` del compose es provisional hasta la medición. Al cambiar de versión
+una imagen base hay que cambiar etiqueta **y** digest (Dependabot lo hace).
+
 ## Perfil `prod` (fase 2, paso C5)
 `application-prod.yml` (sin secretos) + `ProductionSettingsValidator`, que con el perfil `prod` impide arrancar (error claro,
 todas las causas a la vez, sin repetir valores) si: `TRUSTED_PROXY_ADDRESSES` está vacío; `allow-private-hosts=true`; las API docs

@@ -332,6 +332,69 @@ Matiz sobre «404»: con el perfil `prod`, `/actuator/env`, `/actuator/beans`, e
 quien no lleva token**, igual que cualquier otra ruta desconocida, de modo que nada revela qué existe. Desde fuera, el fragmento de
 Caddy devuelve 404 a esas rutas.
 
+**Implementación de C6 (imagen, compose y CI):**
+
+*Imágenes base fijadas por etiqueta exacta Y digest* (el digest del índice multi-arquitectura, así vale en amd64 y arm64):
+`eclipse-temurin:21.0.12_8-jdk-alpine-3.23` para compilar, `eclipse-temurin:21.0.12_8-jre-alpine-3.23` para ejecutar y
+`postgres:16.15-alpine3.23` para la base de datos. Dependabot (ecosistemas `docker` y `docker-compose`) propone las actualizaciones.
+La construcción usa el Maven Wrapper del proyecto (`-Dmaven.test.skip=true`, `MAVEN_OPTS=-Xmx512m`) con la caché de Maven en un
+*cache mount* de BuildKit (las dependencias no entran en ninguna capa). El contexto de construcción es una **lista blanca**
+(`.dockerignore`: solo `pom.xml`, `mvnw`, `.mvn/` y `src/main/`), así que `.env`, `.git`, `docs/`, los tests y `deploy/` ni siquiera
+llegan al daemon. La imagen final lleva las capas de Spring Boot (dependencias, cargador, snapshots, aplicación), el usuario
+`10001`, `SPRING_PROFILES_ACTIVE=prod` y un `HEALTHCHECK` con el `wget` de busybox (la imagen no trae `curl`).
+
+*Qué se espera que gaste construir (estimación, a confirmar con la primera construcción):*
+
+| | Estimación |
+|---|---|
+| RAM del build | pico ≈ 0,8–1,1 GiB dentro de la VM de Docker (JVM de Maven con `-Xmx512m` + javac + descarga del wrapper) |
+| Disco, primera vez | ≈ 1,3–1,6 GiB en el disco virtual de Docker (imágenes JDK+JRE ≈ 0,5 GiB, caché de Maven ≈ 0,3 GiB, imagen final ≈ 0,2 GiB, capas) |
+| Disco, siguientes | unos MB por capa nueva; la caché de Maven se reutiliza |
+| Tiempo | 3–6 min la primera vez, 1–2 min después |
+| Medición de 10 min | aplicación ≤ 512 MiB + PostgreSQL ≤ 256 MiB (límites del compose) |
+
+Un solo `docker build` a la vez; la VM de Docker Desktop de este portátil tiene 4 GiB.
+
+*Qué comprueba cada capa (un fallo es un test o un script, no una lectura a ojo):*
+
+| Qué | Cómo |
+|---|---|
+| Imágenes fijadas por digest, usuario no root, `HEALTHCHECK` sin curl, sin `COPY . .`, sin secretos en `ENV`, `.dockerignore` en lista blanca | `DockerfileGuardianTest` (estático, en `mvnw verify`) |
+| compose: ningún valor secreto, variables obligatorias `${X:?mensaje}`, endurecimiento, redes, nunca una red de Rotten Odds | `ComposeProdGuardianTest` (estático) |
+| La imagen construida no contiene código fuente, tests, `.env`, `.git`, `docs/`, `Dockerfile`, `pom.xml`; el jar solo trae clases compiladas; usuario no root; sin variables sospechosas | `deploy/verify-image.sh <imagen>` (también en CI) |
+| Lo que Docker aplicó de verdad al contenedor en marcha | `deploy/verify-container.sh <contenedor>` (también en CI) |
+
+Las mismas comprobaciones a mano, contra el contenedor en marcha (`$C` = nombre o id del contenedor de la aplicación):
+
+```bash
+docker inspect --format '{{.Config.User}}' $C                                  # 10001:10001
+docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' $C                    # true
+docker inspect --format '{{.HostConfig.CapDrop}} {{.HostConfig.CapAdd}}' $C    # [ALL] [] (o <no value>)
+docker inspect --format '{{.HostConfig.SecurityOpt}}' $C                       # [no-new-privileges:true]
+docker inspect --format '{{.HostConfig.PidsLimit}}' $C                         # 256
+docker inspect --format '{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}}' $C # 536870912 536870912 (sin swap)
+docker inspect --format '{{json .HostConfig.Tmpfs}}' $C                        # {"/tmp":"rw,noexec,nosuid,nodev,size=32m"}
+docker inspect --format '{{.HostConfig.LogConfig.Type}} {{.HostConfig.LogConfig.Config}}' $C  # json-file map[max-file:3 max-size:10m]
+docker inspect --format '{{.State.Health.Status}} {{.State.OOMKilled}} {{.RestartCount}}' $C   # healthy false 0
+docker exec $C id -u                                                           # 10001
+docker exec $C sh -c "grep -E 'CapEff|NoNewPrivs' /proc/1/status"              # CapEff 0000000000000000 / NoNewPrivs 1
+docker exec $C touch /app/x                                                    # falla: sistema de ficheros de solo lectura
+docker exec $C wget -q -O - http://127.0.0.1:8080/actuator/health              # {"status":"UP"}
+docker exec $C wget -q -O /dev/null http://127.0.0.1:8080/actuator/env         # falla (404)
+```
+
+*CI (`job image`):* construye la imagen **sin publicarla** y sin secretos (las credenciales se generan al azar dentro del job y no se
+imprimen), con `contents: read` y las acciones fijadas por SHA; ejecuta `verify-image.sh`, levanta el stack real
+(`compose.prod.yml` con el perfil `prod` y un PostgreSQL de prueba) hasta que está sano, comprueba en el log que el perfil activo es
+`prod` y ejecuta `verify-container.sh`.
+
+*Nombre del servicio y DNS:* los servicios se llaman `controlweb-app` y `controlweb-db`, nunca `api`, `db` ni `caddy`; Caddy no está en
+`controlweb_db` y la aplicación no está en ninguna red de Rotten Odds, de modo que no hay nombre que pueda resolverse a dos
+destinos. El volumen de datos se llama `controlweb_prod_pgdata` para no chocar con el volumen del PostgreSQL de desarrollo.
+
+*JVM:* las opciones (`JAVA_TOOL_OPTIONS`) están en el compose como **valor provisional** (`-Xmx256m` ...), sustituible desde `.env.prod`
+sin reconstruir; el valor final se decide con la medición de 10 minutos (`deploy/measure-memory.sh`).
+
 ## 13. Pasos
 
 ### Fase A: solo este repo
@@ -345,7 +408,7 @@ Caddy devuelve 404 a esas rutas.
 | **C3 [CW]** ✅ | Heartbeat opcional (`app.heartbeat.url`, vacío = apagado) | Hecho: ver «Implementación de C3» | revert |
 | **C4 [CW]** *(omitido por ahora; ver S0)* | Mensaje "desafío de Cloudflare" | Tests | revert |
 | **C5 [CW]** ✅ | `application-prod.yml`, protecciones del perfil `prod`, Flyway `*:future`, cron de retención | Hecho: ver «Implementación de C5» | revert |
-| **C6 [CW]** | Dockerfile, `compose.prod.yml`, job de CI de la imagen | ⏸ En local con límite de 512 MiB; anotar RSS tras 10 min | revert |
+| **C6 [CW]** | Dockerfile, `compose.prod.yml`, job de CI de la imagen | Hecho el código y las comprobaciones estáticas; ⏸ falta construir y medir (10 min, límite de 512 MiB) | revert |
 | **C7 [CW]** | `deploy/` completo + shellcheck en CI | `bash -n`, shellcheck, revisión | revert |
 
 **Requisitos de C5 (añadidos al aprobar C1):**

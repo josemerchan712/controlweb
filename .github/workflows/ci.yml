@@ -49,3 +49,59 @@ jobs:
           name: surefire-reports
           path: target/surefire-reports/
           retention-days: 7
+
+  image:
+    name: production image
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # Builds the image and starts it for a moment. It is NEVER published, and it needs no secret: every credential below is
+    # generated randomly inside this job and thrown away with the runner.
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Build the image (not pushed anywhere)
+        run: docker build --tag controlweb-app:ci .
+
+      - name: Check what is inside the image
+        run: deploy/verify-image.sh controlweb-app:ci
+
+      - name: Generate throw-away credentials (never printed, never stored)
+        run: |
+          umask 077
+          {
+            echo "DB_USERNAME=controlweb"
+            echo "DB_PASSWORD=$(openssl rand -hex 18)"
+            echo "JWT_SECRET=$(openssl rand -base64 32)"
+            echo "ADMIN_EMAIL=admin@example.com"
+            echo "ADMIN_PASSWORD=$(openssl rand -hex 18)"
+            echo "TRUSTED_PROXY_ADDRESSES=10.77.0.10"
+            echo "PUBLIC_CORS_ALLOWED_ORIGINS=https://josemariamerchan.dev"
+            echo "CONTROLWEB_TAG=ci"
+          } > "$RUNNER_TEMP/env.ci"
+
+      - name: Start the production stack with the prod profile
+        run: |
+          docker network create --internal --subnet 10.77.0.0/24 \
+            --opt com.docker.network.bridge.name=cw-proxy controlweb_proxy
+          docker compose -p controlweb-ci -f compose.prod.yml --env-file "$RUNNER_TEMP/env.ci" config --quiet
+          docker compose -p controlweb-ci -f compose.prod.yml --env-file "$RUNNER_TEMP/env.ci" up -d --wait --wait-timeout 240
+
+      - name: Verify the running container (profile, health, hardening applied by Docker)
+        run: |
+          container=$(docker compose -p controlweb-ci -f compose.prod.yml --env-file "$RUNNER_TEMP/env.ci" ps -q controlweb-app)
+          docker logs "$container" 2>&1 | grep -F "The following 1 profile is active: \"prod\""
+          deploy/verify-container.sh "$container"
+
+      - name: Show the logs if something failed
+        if: failure()
+        run: docker compose -p controlweb-ci -f compose.prod.yml --env-file "$RUNNER_TEMP/env.ci" logs --no-color --tail 80
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker compose -p controlweb-ci -f compose.prod.yml --env-file "$RUNNER_TEMP/env.ci" down --volumes --remove-orphans || true
+          docker network rm controlweb_proxy || true
+          rm -f "$RUNNER_TEMP/env.ci"

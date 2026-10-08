@@ -55,11 +55,27 @@ class CiWorkflowTest {
 	}
 
 	@Test
-	@DisplayName("Dependabot updates Maven and GitHub Actions weekly")
+	@DisplayName("Dependabot updates Maven, Docker (Dockerfile and compose) and GitHub Actions weekly")
 	void dependabot() throws IOException {
 		String config = read(DEPENDABOT);
 
-		assertThat(config).contains("package-ecosystem: maven").contains("package-ecosystem: github-actions");
-		assertThat(config.split("interval: weekly", -1)).hasSize(3);
+		assertThat(config).contains("package-ecosystem: maven").contains("package-ecosystem: github-actions")
+				.contains("package-ecosystem: docker\n").contains("package-ecosystem: docker-compose");
+		assertThat(config.split("interval: weekly", -1)).hasSize(5);
+	}
+
+	@Test
+	@DisplayName("the image job builds the production image WITHOUT publishing it and without secrets, and starts the real stack")
+	void imageJobBuildsWithoutPublishing() throws IOException {
+		String workflow = read(WORKFLOW).replace("\r\n", "\n");
+		String job = workflow.substring(workflow.indexOf("\n  image:"));
+
+		assertThat(job).contains("docker build").contains("deploy/verify-image.sh").contains("deploy/verify-container.sh")
+				.contains("compose.prod.yml").contains("up -d --wait");
+		assertThat(job).doesNotContain("docker push").doesNotContain("docker login").doesNotContain("--push")
+				.doesNotContain("ghcr.io").doesNotContain("secrets.").doesNotContain("packages: write")
+				.doesNotContain("build-push-action");
+		assertThat(job).as("credentials are generated inside the job").contains("openssl rand");
+		assertThat(job).contains("persist-credentials: false").contains("if: always()");
 	}
 }
