@@ -1,5 +1,12 @@
-# Local development: allow monitoring apps running on this machine (localhost, LAN).
+# Local development: allow monitoring apps running on this machine (localhost, LAN) and
+# publish the API docs (Swagger UI at /swagger-ui.html, public only in this profile).
 # NEVER activate this profile in production.
 app:
   checker:
     allow-private-hosts: true
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true

@@ -20,6 +20,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import dev.josemariamerchan.controlweb.TestTokens;
 import dev.josemariamerchan.controlweb.TestcontainersConfiguration;
 import dev.josemariamerchan.controlweb.incident.domain.Incident;
 import dev.josemariamerchan.controlweb.incident.domain.IncidentType;
@@ -62,7 +63,7 @@ class SiteApiIntegrationTest {
 	}
 
 	private long createSite(String name, String url) throws Exception {
-		String body = mvc.perform(post("/api/sites").contentType(MediaType.APPLICATION_JSON)
+		String body = mvc.perform(post("/api/sites").with(TestTokens.bearer()).contentType(MediaType.APPLICATION_JSON)
 				.content("{\"name\": \"%s\", \"url\": \"%s\", \"checkIntervalSeconds\": 60}".formatted(name, url)))
 				.andExpect(status().isCreated())
 				.andReturn().getResponse().getContentAsString();
@@ -74,7 +75,7 @@ class SiteApiIntegrationTest {
 	void fullLifecycle() throws Exception {
 		long id = createSite("Blog", "HTTPS://Blog.Example.com:443/#home");
 
-		mvc.perform(get("/api/sites/{id}", id))
+		mvc.perform(get("/api/sites/{id}", id).with(TestTokens.bearer()))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.name").value("Blog"))
 				.andExpect(jsonPath("$.url").value("https://blog.example.com"))
@@ -82,11 +83,11 @@ class SiteApiIntegrationTest {
 				.andExpect(jsonPath("$.active").value(true))
 				.andExpect(jsonPath("$.publicVisible").value(false));
 
-		mvc.perform(get("/api/sites"))
+		mvc.perform(get("/api/sites").with(TestTokens.bearer()))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.length()").value(1));
 
-		mvc.perform(put("/api/sites/{id}", id).contentType(MediaType.APPLICATION_JSON).content("""
+		mvc.perform(put("/api/sites/{id}", id).with(TestTokens.bearer()).contentType(MediaType.APPLICATION_JSON).content("""
 				{"name": "Blog v2", "url": "https://blog.example.com/health", "checkIntervalSeconds": 120,
 				 "active": false, "publicVisible": true}
 				"""))
@@ -96,8 +97,8 @@ class SiteApiIntegrationTest {
 				.andExpect(jsonPath("$.active").value(false))
 				.andExpect(jsonPath("$.publicVisible").value(true));
 
-		mvc.perform(delete("/api/sites/{id}", id)).andExpect(status().isNoContent());
-		mvc.perform(get("/api/sites/{id}", id)).andExpect(status().isNotFound());
+		mvc.perform(delete("/api/sites/{id}", id).with(TestTokens.bearer())).andExpect(status().isNoContent());
+		mvc.perform(get("/api/sites/{id}", id).with(TestTokens.bearer())).andExpect(status().isNotFound());
 	}
 
 	@Test
@@ -119,7 +120,7 @@ class SiteApiIntegrationTest {
 	void differentSpellingOfSameUrlIsDuplicate() throws Exception {
 		createSite("Blog", "https://blog.example.com");
 
-		mvc.perform(post("/api/sites").contentType(MediaType.APPLICATION_JSON).content("""
+		mvc.perform(post("/api/sites").with(TestTokens.bearer()).contentType(MediaType.APPLICATION_JSON).content("""
 				{"name": "Blog again", "url": "HTTPS://BLOG.EXAMPLE.COM:443/#x", "checkIntervalSeconds": 60}
 				"""))
 				.andExpect(status().isConflict());
@@ -133,7 +134,7 @@ class SiteApiIntegrationTest {
 		createSite("Blog", "https://blog.example.com");
 		long shop = createSite("Shop", "https://shop.example.com");
 
-		mvc.perform(put("/api/sites/{id}", shop).contentType(MediaType.APPLICATION_JSON).content("""
+		mvc.perform(put("/api/sites/{id}", shop).with(TestTokens.bearer()).contentType(MediaType.APPLICATION_JSON).content("""
 				{"name": "Shop", "url": "https://Blog.example.com/", "checkIntervalSeconds": 60}
 				"""))
 				.andExpect(status().isConflict());
@@ -146,7 +147,7 @@ class SiteApiIntegrationTest {
 	void updateKeepingOwnUrl() throws Exception {
 		long id = createSite("Blog", "https://blog.example.com");
 
-		mvc.perform(put("/api/sites/{id}", id).contentType(MediaType.APPLICATION_JSON).content("""
+		mvc.perform(put("/api/sites/{id}", id).with(TestTokens.bearer()).contentType(MediaType.APPLICATION_JSON).content("""
 				{"name": "Renamed", "url": "https://BLOG.example.com/", "checkIntervalSeconds": 90}
 				"""))
 				.andExpect(status().isOk())
@@ -156,7 +157,7 @@ class SiteApiIntegrationTest {
 	@Test
 	@DisplayName("embedded credentials are rejected with 400 and nothing is stored")
 	void rejectsCredentials() throws Exception {
-		mvc.perform(post("/api/sites").contentType(MediaType.APPLICATION_JSON).content("""
+		mvc.perform(post("/api/sites").with(TestTokens.bearer()).contentType(MediaType.APPLICATION_JSON).content("""
 				{"name": "Blog", "url": "http://admin:secret@blog.example.com", "checkIntervalSeconds": 60}
 				"""))
 				.andExpect(status().isBadRequest());
@@ -185,7 +186,7 @@ class SiteApiIntegrationTest {
 
 		assertThat(rules.count()).isEqualTo(6);
 
-		mvc.perform(delete("/api/sites/{id}", id)).andExpect(status().isNoContent());
+		mvc.perform(delete("/api/sites/{id}", id).with(TestTokens.bearer())).andExpect(status().isNoContent());
 
 		assertThat(sites.findById(id)).isEmpty();
 		assertThat(checks.findAll()).extracting(check -> check.getSite().getId()).containsOnly(other);
@@ -196,6 +197,6 @@ class SiteApiIntegrationTest {
 	@Test
 	@DisplayName("DELETE of an unknown site is a 404")
 	void deleteUnknown() throws Exception {
-		mvc.perform(delete("/api/sites/{id}", 999_999)).andExpect(status().isNotFound());
+		mvc.perform(delete("/api/sites/{id}", 999_999).with(TestTokens.bearer())).andExpect(status().isNotFound());
 	}
 }

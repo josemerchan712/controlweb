@@ -20,6 +20,7 @@ import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -35,6 +36,7 @@ import dev.josemariamerchan.controlweb.site.service.SiteNotFoundException;
 import dev.josemariamerchan.controlweb.site.service.SiteService;
 
 @WebMvcTest(SiteController.class)
+@AutoConfigureMockMvc(addFilters = false) // authentication is covered by the security tests
 class SiteControllerTest {
 
 	private static final Instant T0 = Instant.parse("2026-01-01T10:00:00Z");

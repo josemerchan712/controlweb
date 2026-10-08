@@ -24,6 +24,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import dev.josemariamerchan.controlweb.TestTokens;
 import dev.josemariamerchan.controlweb.TestcontainersConfiguration;
 import dev.josemariamerchan.controlweb.common.net.HostResolver;
 import dev.josemariamerchan.controlweb.site.repository.SiteRepository;
@@ -77,14 +78,14 @@ class SiteApiSsrfIntegrationTest {
 	@Test
 	@DisplayName("a public host is accepted")
 	void publicHostAccepted() throws Exception {
-		mvc.perform(post("/api/sites").contentType(MediaType.APPLICATION_JSON).content(body("https://public.example.com")))
+		mvc.perform(post("/api/sites").with(TestTokens.bearer()).contentType(MediaType.APPLICATION_JSON).content(body("https://public.example.com")))
 				.andExpect(status().isCreated());
 	}
 
 	@Test
 	@DisplayName("a name that resolves to a private address is rejected with 400 and not stored")
 	void privateResolutionRejected() throws Exception {
-		mvc.perform(post("/api/sites").contentType(MediaType.APPLICATION_JSON).content(body("https://internal.example.com")))
+		mvc.perform(post("/api/sites").with(TestTokens.bearer()).contentType(MediaType.APPLICATION_JSON).content(body("https://internal.example.com")))
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("internal.example.com")));
 
@@ -94,9 +95,9 @@ class SiteApiSsrfIntegrationTest {
 	@Test
 	@DisplayName("the cloud metadata address (169.254.169.254) is rejected, by name and as a literal")
 	void metadataEndpointRejected() throws Exception {
-		mvc.perform(post("/api/sites").contentType(MediaType.APPLICATION_JSON).content(body("http://metadata.example.com/latest")))
+		mvc.perform(post("/api/sites").with(TestTokens.bearer()).contentType(MediaType.APPLICATION_JSON).content(body("http://metadata.example.com/latest")))
 				.andExpect(status().isBadRequest());
-		mvc.perform(post("/api/sites").contentType(MediaType.APPLICATION_JSON).content(body("http://169.254.169.254/latest/meta-data")))
+		mvc.perform(post("/api/sites").with(TestTokens.bearer()).contentType(MediaType.APPLICATION_JSON).content(body("http://169.254.169.254/latest/meta-data")))
 				.andExpect(status().isBadRequest());
 
 		assertThat(sites.count()).isZero();
@@ -106,7 +107,7 @@ class SiteApiSsrfIntegrationTest {
 	@DisplayName("loopback is rejected as a literal IPv4, a literal IPv6 and via DNS")
 	void loopbackRejected() throws Exception {
 		for (String url : new String[] { "http://127.0.0.1:8080", "http://[::1]:8080", "http://loopback.example.com" }) {
-			mvc.perform(post("/api/sites").contentType(MediaType.APPLICATION_JSON).content(body(url)))
+			mvc.perform(post("/api/sites").with(TestTokens.bearer()).contentType(MediaType.APPLICATION_JSON).content(body(url)))
 					.andExpect(status().isBadRequest());
 		}
 
@@ -116,11 +117,11 @@ class SiteApiSsrfIntegrationTest {
 	@Test
 	@DisplayName("editing a site to point to a private host is rejected and the stored URL is unchanged")
 	void updateToPrivateHostRejected() throws Exception {
-		mvc.perform(post("/api/sites").contentType(MediaType.APPLICATION_JSON).content(body("https://public.example.com")))
+		mvc.perform(post("/api/sites").with(TestTokens.bearer()).contentType(MediaType.APPLICATION_JSON).content(body("https://public.example.com")))
 				.andExpect(status().isCreated());
 		long id = sites.findAll().get(0).getId();
 
-		mvc.perform(put("/api/sites/{id}", id).contentType(MediaType.APPLICATION_JSON).content(body("http://internal.example.com")))
+		mvc.perform(put("/api/sites/{id}", id).with(TestTokens.bearer()).contentType(MediaType.APPLICATION_JSON).content(body("http://internal.example.com")))
 				.andExpect(status().isBadRequest());
 
 		assertThat(sites.findById(id).orElseThrow().getUrl()).isEqualTo("https://public.example.com");
@@ -129,7 +130,7 @@ class SiteApiSsrfIntegrationTest {
 	@Test
 	@DisplayName("a host that does not resolve yet is accepted (nothing to attack; the checker will report it as down)")
 	void unresolvableHostAccepted() throws Exception {
-		mvc.perform(post("/api/sites").contentType(MediaType.APPLICATION_JSON).content(body("https://nope.invalid")))
+		mvc.perform(post("/api/sites").with(TestTokens.bearer()).contentType(MediaType.APPLICATION_JSON).content(body("https://nope.invalid")))
 				.andExpect(status().isCreated());
 	}
 }

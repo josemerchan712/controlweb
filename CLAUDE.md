@@ -39,8 +39,8 @@ docker compose down                # parar la base de datos
 ## Estado
 - Paso 0 (scaffold): hecho.
 - Paso 1 (esquema Flyway V1 + entidades + tests de repositorio): hecho.
-- Paso 2 (CRUD de sitios + protección SSRF): hecho. Siguiente: paso 3 (seguridad JWT).
-  **Los endpoints `/api/sites` están abiertos hasta el paso 3** (aún no hay Spring Security).
+- Paso 2 (CRUD de sitios + protección SSRF): hecho.
+- Paso 3 (seguridad JWT): hecho. Siguiente: paso 4 (checker HTTP + SSL, con re-validación SSRF por petición y salto).
 
 ## CRUD de sitios y SSRF (paso 2)
 - `SiteUrlNormalizer` canonicaliza la URL antes de guardar (esquema y host en minúsculas, sin punto final en el host,
@@ -69,6 +69,33 @@ Tablas `users`, `sites`, `checks`, `alert_rules`, `incidents`. Detalles que impo
 - Borrar un sitio borra en cascada (a nivel de BD) sus checks, reglas e incidencias.
 - Las entidades no tienen setters públicos ni usan `Clock` internamente: reciben el `Instant` desde el servicio.
 - Los tests de repositorio usan `@PostgresDataJpaTest` (PostgreSQL real con Flyway, no H2) para poder probar constraints.
+
+## Seguridad (paso 3)
+- **Denegar por defecto**: `SecurityConfig` exige JWT en todo salvo `POST /api/auth/login`, `/api/public/**` y
+  `GET /actuator/health`. JWT HS256 con `oauth2-resource-server` (Nimbus): el decoder solo acepta HS256, emisor
+  `controlweb` y token no caducado (sin margen de reloj); `alg=none`, otras firmas o payload manipulado → 401.
+  Sin sesiones ni cookies (stateless), por eso CSRF está desactivado.
+- **Arranque seguro**: `SecuritySettingsValidator` (un `EnvironmentPostProcessor`) valida la configuración ANTES de crear
+  ningún bean (ni DataSource ni Flyway): `JWT_SECRET` obligatorio, Base64 y ≥ 32 bytes; `ADMIN_PASSWORD` ≥ 12
+  caracteres y ≤ 72 bytes (límite de BCrypt); `ADMIN_EMAIL` válido; `CORS_ALLOWED_ORIGINS` solo orígenes exactos
+  (sin `*`). Si falla, `InvalidSecurityConfigurationFailureAnalyzer` imprime "APPLICATION FAILED TO START" con la
+  descripción y la acción, sin eco del valor. **No hay valores por defecto de secretos en `application.yml`.**
+  Los `toString()` de las propiedades y de `LoginRequest`/`LoginResponse` ocultan secretos.
+- **Login sin enumeración**: mismo 401 y mismo mensaje ("Invalid email or password") para email desconocido y contraseña
+  incorrecta; siempre se hace una comparación BCrypt (contra un hash ficticio generado al arrancar, mismo coste) para no
+  filtrar por tiempo. El email se normaliza (trim + minúsculas). No se loguean contraseñas ni tokens (test).
+- **Admin**: `AdminSeeder` crea al usuario desde `ADMIN_EMAIL`/`ADMIN_PASSWORD` al arrancar y, si esa contraseña cambia,
+  actualiza el hash en el siguiente arranque. No existe endpoint de registro.
+- **Actuator**: solo `health`, público y sin detalles; la página índice `/actuator` está desactivada.
+- **Swagger/OpenAPI** (springdoc): desactivado por defecto; en el perfil `dev` está activo y es público
+  (`/swagger-ui.html`, `/v3/api-docs`), mediante una cadena de seguridad extra solo de ese perfil.
+- **CORS**: orígenes exactos de `CORS_ALLOWED_ORIGINS`, sin credenciales, solo bajo `/api/**`; vacío = sin acceso cross-origin.
+- **Tests**: las credenciales de los tests se generan al azar en cada ejecución (`TestCredentials`, inyectadas por
+  `TestSecretsEnvironmentPostProcessor`), así no hay ningún secreto en el repo ni se cuela tu `.env`.
+  `ApiSecurityGuardTest` recorre todos los endpoints `/api/**` y falla si alguno responde algo distinto de 401 sin token
+  (salvo la lista explícita de públicos). Añadir un endpoint público es una decisión consciente: tocar `SecurityConfig`
+  y la lista `isPublic` de ese test.
+- Los tests de slice `@WebMvcTest` usan `@AutoConfigureMockMvc(addFilters = false)`; la seguridad se prueba aparte.
 
 ## Fuera de la fase 1
 Frontend React + Vite, Dockerfile y despliegue en Hetzner, refresh tokens.

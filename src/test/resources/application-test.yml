@@ -1,4 +1,7 @@
 # Active in every test run (set in pom.xml). Tests that exercise the SSRF guard override this property.
+# JWT secret and admin credentials are NOT here: they are generated randomly per run (TestCredentials).
 app:
   checker:
     allow-private-hosts: true
+  cors:
+    allowed-origins: http://localhost:5173
