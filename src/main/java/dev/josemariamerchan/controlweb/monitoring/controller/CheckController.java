@@ -5,9 +5,13 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 import dev.josemariamerchan.controlweb.monitoring.dto.CheckResponse;
 import dev.josemariamerchan.controlweb.monitoring.service.CheckRunner;
 
+@Tag(name = "Checks", description = "Immediate checks")
 @RestController
 @RequestMapping("/api/sites")
 public class CheckController {
@@ -19,6 +23,8 @@ public class CheckController {
 	}
 
 	/** Checks the site now (even if it is inactive) and returns the stored result; 409 if a check is running. */
+	@Operation(summary = "Check a site now",
+			description = "Runs a check immediately, stores it and evaluates the alert rules. Answers 409 if a check of this site is already running.")
 	@PostMapping("/{id}/check")
 	public CheckResponse checkNow(@PathVariable Long id) {
 		return runner.runManually(id);

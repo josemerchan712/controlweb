@@ -10,7 +10,7 @@ import dev.josemariamerchan.controlweb.auth.config.AdminProperties;
 import dev.josemariamerchan.controlweb.auth.config.JwtProperties;
 
 /**
- * Fails fast: validates the security settings as soon as the environment is ready, before any bean
+ * Fails fast: validates the security settings (and the retention window) as soon as the environment is ready, before any bean
  * exists. Otherwise an unrelated failure (e.g. the database being down) could hit first and hide
  * the real problem, or Flyway could migrate a database for an instance that is misconfigured.
  *
@@ -26,6 +26,7 @@ public class SecuritySettingsValidator implements EnvironmentPostProcessor, Orde
 		binder.bindOrCreate("app.admin", AdminProperties.class);
 		binder.bindOrCreate("app.cors", CorsProperties.class);
 		binder.bindOrCreate("app.public", PublicProperties.class);
+		binder.bindOrCreate("app.retention", RetentionProperties.class);
 	}
 
 	@Override

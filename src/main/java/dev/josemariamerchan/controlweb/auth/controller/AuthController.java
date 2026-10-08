@@ -10,12 +10,16 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 import dev.josemariamerchan.controlweb.auth.dto.LoginRequest;
 import dev.josemariamerchan.controlweb.auth.dto.LoginResponse;
 import dev.josemariamerchan.controlweb.auth.dto.MeResponse;
 import dev.josemariamerchan.controlweb.auth.service.AuthService;
 import jakarta.validation.Valid;
 
+@Tag(name = "Authentication", description = "Login and identity of the current token")
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
@@ -26,12 +30,16 @@ public class AuthController {
 		this.authService = authService;
 	}
 
+	@Operation(summary = "Log in",
+			description = "Exchanges the administrator email and password for a short-lived access token. The same error is returned for an unknown email and a wrong password.")
 	@PostMapping("/login")
 	public LoginResponse login(@Valid @RequestBody LoginRequest request) {
 		return authService.login(request.email(), request.password());
 	}
 
 	/** The identity carried by the (already verified) access token. */
+	@Operation(summary = "Current user",
+			description = "Returns the identity carried by the access token.")
 	@GetMapping("/me")
 	public MeResponse me(@AuthenticationPrincipal Jwt jwt) {
 		List<String> roles = jwt.getClaimAsStringList("roles");

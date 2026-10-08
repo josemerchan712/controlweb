@@ -47,7 +47,7 @@ class AlertMessageFormatterTest {
 		assertThat(message).isEqualTo("🔴 <b>Incidencia abierta</b>\n"
 				+ "<b>Sitio:</b> Mi Blog\n"
 				+ "<b>Tipo:</b> Caída del sitio\n"
-				+ "<b>Detalle:</b> Site is down: 2 consecutive failed checks (threshold 2). Last error: HTTP 500\n"
+				+ "<b>Detalle:</b> Sitio caído: 2 comprobaciones fallidas consecutivas (umbral 2). Último error: respuesta HTTP 500.\n"
 				+ "<b>Desde:</b> 2026-03-01 12:00 UTC");
 	}
 

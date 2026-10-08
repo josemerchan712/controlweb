@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# The workflow only reads the repository. No secrets or private variables are used anywhere in it:
+# the tests generate their own random credentials and talk to a throwaway PostgreSQL container.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: mvnw verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # Actions are pinned to a full commit SHA (the tag is in the comment); Dependabot keeps them current.
+      - name: Check out the code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Java 21 (Temurin) with the Maven cache
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # The integration tests start PostgreSQL with Testcontainers, which needs a Docker daemon.
+      # GitHub's ubuntu runners include one; fail early and clearly if that ever changes.
+      - name: Check that Docker is available for Testcontainers
+        run: docker info --format 'Docker {{.ServerVersion}} on {{.OperatingSystem}}'
+
+      - name: Build and test (unit + integration)
+        run: ./mvnw --batch-mode --no-transfer-progress verify
+
+      - name: Keep the test reports when something fails
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          retention-days: 7

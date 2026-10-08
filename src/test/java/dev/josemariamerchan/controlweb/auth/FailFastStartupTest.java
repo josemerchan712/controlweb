@@ -16,6 +16,7 @@ import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Configuration;
 
+import dev.josemariamerchan.controlweb.config.InvalidConfigurationException;
 import dev.josemariamerchan.controlweb.config.InvalidSecurityConfigurationException;
 
 /**
@@ -81,6 +82,19 @@ class FailFastStartupTest {
 		assertThat(output.getAll())
 				.contains("ADMIN_PASSWORD is too short")
 				.doesNotContain("too-short-1");
+	}
+
+	@Test
+	@DisplayName("RETENTION_DAYS below 30 prevents startup with a clear message")
+	void retentionBelowThirtyDays(CapturedOutput output) {
+		assertThatThrownBy(() -> start("app.jwt.secret=" + SECRET_32_BYTES, "app.admin.email=admin@example.com",
+				"app.admin.password=long-enough-password", "app.retention.days=10"))
+				.hasRootCauseInstanceOf(InvalidConfigurationException.class);
+
+		assertThat(output.getAll())
+				.contains("APPLICATION FAILED TO START")
+				.contains("RETENTION_DAYS is 10, but at least 30 days are required")
+				.contains("Action:");
 	}
 
 	@Test

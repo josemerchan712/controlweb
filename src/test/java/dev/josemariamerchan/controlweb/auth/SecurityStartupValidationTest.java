@@ -18,7 +18,7 @@ import dev.josemariamerchan.controlweb.auth.config.JwtProperties;
 import dev.josemariamerchan.controlweb.config.CorsProperties;
 import dev.josemariamerchan.controlweb.config.PublicProperties;
 import dev.josemariamerchan.controlweb.config.InvalidSecurityConfigurationException;
-import dev.josemariamerchan.controlweb.config.InvalidSecurityConfigurationFailureAnalyzer;
+import dev.josemariamerchan.controlweb.config.InvalidConfigurationFailureAnalyzer;
 
 /**
  * The application must refuse to start with missing or weak security settings, with a message that
@@ -219,7 +219,7 @@ class SecurityStartupValidationTest {
 		InvalidSecurityConfigurationException exception = new InvalidSecurityConfigurationException(
 				"JWT_SECRET is not set.", "Set JWT_SECRET in your environment or .env file.");
 
-		FailureAnalysis analysis = new InvalidSecurityConfigurationFailureAnalyzer()
+		FailureAnalysis analysis = new InvalidConfigurationFailureAnalyzer()
 				.analyze(new IllegalStateException("wrapper", exception));
 
 		assertThat(analysis).isNotNull();
@@ -230,6 +230,6 @@ class SecurityStartupValidationTest {
 	@Test
 	@DisplayName("the failure analyzer ignores unrelated exceptions")
 	void failureAnalyzerIgnoresOthers() {
-		assertThat(new InvalidSecurityConfigurationFailureAnalyzer().analyze(new IllegalStateException("other"))).isNull();
+		assertThat(new InvalidConfigurationFailureAnalyzer().analyze(new IllegalStateException("other"))).isNull();
 	}
 }

@@ -20,6 +20,8 @@ import dev.josemariamerchan.controlweb.incident.event.IncidentResolved;
  * are ALWAYS escaped ({@code &}, {@code <}, {@code >}): nothing they contain can become markup.</li>
  * <li>The site URL is never included, only its name. URLs that appear inside the detail (e.g. in a
  * redirect-loop error) are replaced too.</li>
+ * <li>Known incident reasons are translated to Spanish here (see {@link IncidentDetailTranslator}); the database keeps
+ * the original text.</li>
  * <li>The message never exceeds Telegram's 4096 characters. Truncation is done on the RAW text before
  * escaping, so an entity ({@code &amp;}) or a tag can never be cut in half.</li>
  * </ul>
@@ -37,7 +39,8 @@ public class AlertMessageFormatter {
 	private static final String URL_PLACEHOLDER = "[URL omitida]";
 
 	public String opened(IncidentOpened event) {
-		return fit(event.siteName(), event.details(), (name, detail) -> {
+		// Known reasons are shown in Spanish (the stored text stays English); unknown ones are shown sanitized as they are.
+		return fit(event.siteName(), IncidentDetailTranslator.translate(clean(event.details())), (name, detail) -> {
 			StringBuilder text = new StringBuilder()
 					.append("🔴 <b>Incidencia abierta</b>\n")
 					.append("<b>Sitio:</b> ").append(escape(name)).append('\n')

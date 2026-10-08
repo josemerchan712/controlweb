@@ -46,7 +46,10 @@ docker compose down                # parar la base de datos
 - Paso 6 (motor de reglas, incidencias y eventos + API de reglas): hecho.
 - Paso 7 (alertas por Telegram): hecho.
 - Paso 8 (API de lectura: estado, histórico, estadísticas, incidencias): hecho.
-- Paso 9 (endpoint público de estado): hecho. Siguiente: paso 10 (pulido: retención de checks, OpenAPI, CI, README final).
+- Paso 9 (endpoint público de estado): hecho.
+- Paso 10 (pulido: retención, OpenAPI, CI, alertas en español, README, auditoría de secretos): hecho. **La fase 1 está completa.**
+- Pendiente (fases siguientes, solo cuando el usuario lo pida): rate limiting del login (**obligatorio antes de desplegar**),
+  Dockerfile y despliegue en Hetzner, dashboard React + Vite, refresh tokens.
 
 ## CRUD de sitios y SSRF (paso 2)
 - `SiteUrlNormalizer` canonicaliza la URL antes de guardar (esquema y host en minúsculas, sin punto final en el host,
@@ -286,7 +289,7 @@ tienen efectos secundarios (un test comprueba que solo se emiten `SELECT` y que 
 - **Arranque seguro**: `SecuritySettingsValidator` (un `EnvironmentPostProcessor`) valida la configuración ANTES de crear
   ningún bean (ni DataSource ni Flyway): `JWT_SECRET` obligatorio, Base64 y ≥ 32 bytes; `ADMIN_PASSWORD` ≥ 12
   caracteres y ≤ 72 bytes (límite de BCrypt); `ADMIN_EMAIL` válido; `CORS_ALLOWED_ORIGINS` solo orígenes exactos
-  (sin `*`). Si falla, `InvalidSecurityConfigurationFailureAnalyzer` imprime "APPLICATION FAILED TO START" con la
+  (sin `*`). Si falla, `InvalidConfigurationFailureAnalyzer` imprime "APPLICATION FAILED TO START" con la
   descripción y la acción, sin eco del valor. **No hay valores por defecto de secretos en `application.yml`.**
   Los `toString()` de las propiedades y de `LoginRequest`/`LoginResponse` ocultan secretos.
 - **Login sin enumeración**: mismo 401 y mismo mensaje ("Invalid email or password") para email desconocido y contraseña
@@ -309,7 +312,31 @@ tienen efectos secundarios (un test comprueba que solo se emiten `SELECT` y que 
   aleatorio y un servidor local o `MockRestServiceServer`.
 - Los tests de slice `@WebMvcTest` usan `@AutoConfigureMockMvc(addFilters = false)`; la seguridad se prueba aparte.
 
-## Fuera de la fase 1
-Frontend React + Vite, Dockerfile y despliegue en Hetzner, refresh tokens.
+## Pulido (paso 10)
+- **Retención** (`retention/`): `CheckRetentionJob` (cron `app.retention.cron`, por defecto 03:30) llama a
+  `CheckRetentionService.purgeExpired()`, que borra los checks con `checked_at < now - days` (el `Clock` decide `now`; justo
+  en el límite se conserva) en lotes de `app.retention.batch-size` (5000), cada lote en su transacción. No toca incidencias.
+  Un fallo se captura y solo se registra el nombre de la excepción. `app.retention.enabled=false` (por defecto en los tests)
+  elimina el job. `RETENTION_DAYS` < 30 hace fallar el arranque: `RetentionProperties` lanza `InvalidConfigurationException`
+  (base de `InvalidSecurityConfigurationException`) y `InvalidConfigurationFailureAnalyzer` imprime el bloque
+  "APPLICATION FAILED TO START". No hay índice nuevo para esto (un barrido nocturno no lo justifica).
+- **OpenAPI** (`config/OpenApiConfig`): esquema Bearer global, `@Tag` por controlador y `@Operation(summary, description)` por
+  endpoint; el resto (401/400/404/409/429/503 como `application/problem+json` con el esquema `ProblemDetail`, y quitar el
+  requisito de token en login y `/api/public/status`) se añade por regla en un `OpenApiCustomizer`, sin ensuciar los
+  controladores. Solo se sirve con el perfil `dev` (`OpenApiDocumentationTest`, `SwaggerDevProfileIntegrationTest`).
+- **CI**: `.github/workflows/ci.yml` (`./mvnw verify`, Java 21 Temurin, caché Maven, `contents: read`, sin secretos, acciones fijadas
+  por SHA completo; comprueba `docker info` porque Testcontainers lo necesita) y `.github/dependabot.yml` (Maven y acciones,
+  semanal). `CiWorkflowTest` vigila esas garantías. **`mvnw` debe conservar el bit ejecutable en git** (`100755`).
+- **Alertas en español**: `alert/IncidentDetailTranslator` traduce solo en el mensaje de Telegram los motivos conocidos (HTTP,
+  timeout, DNS —sin repetir el host—, SSL, redirecciones, latencia, certificado); la base de datos sigue en inglés. Un motivo
+  desconocido se muestra tal cual, saneado y escapado. Si cambias un texto de `HttpSiteChecker` o `RuleEngine`, actualiza el
+  traductor y su test.
+- **README** completo en español (diagramas Mermaid, decisiones, variables, ejemplos, limitaciones, hoja de ruta). Las insignias de CI
+  usan `josemerchan712/controlweb` (el remoto actual).
+- **Decisión del usuario**: el repositorio NO se hace público y NO se añade licencia hasta que él lo decida.
+
+## Fuera de la fase 1 (pendiente)
+Frontend React + Vite, Dockerfile y despliegue en Hetzner, refresh tokens. Licencia y visibilidad pública del repositorio:
+decisión del usuario, pendiente.
 
 > **OBLIGATORIO antes de desplegar:** el rate limiting del login (`POST /api/auth/login`).

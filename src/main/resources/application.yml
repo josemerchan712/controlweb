@@ -45,6 +45,12 @@ app:
     fixed-delay: 10s       # pause between the END of a cycle and the start of the next
     max-concurrency: 10    # checks running at the same time
     shutdown-timeout: 10s  # wait for running checks when the application stops
+  retention:
+    # Daily purge of old checks (incidents are never deleted). Fewer than 30 days fails at startup.
+    enabled: true
+    days: ${RETENTION_DAYS:90}
+    cron: "0 30 3 * * *"   # every day at 03:30 (server time)
+    batch-size: 5000       # rows deleted per transaction
   rules:
     # HIGH_LATENCY opens only when this many CONSECUTIVE successful checks all exceed the threshold
     # (so a single spike never opens an incident).
