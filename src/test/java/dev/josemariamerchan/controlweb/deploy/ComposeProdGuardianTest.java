@@ -177,6 +177,9 @@ class ComposeProdGuardianTest {
 		assertThat(db.get("mem_limit")).isEqualTo("256m");
 		assertThat(db.get("memswap_limit")).isEqualTo("256m");
 		assertThat(db).containsKey("healthcheck");
+		@SuppressWarnings("unchecked")
+		Map<String, Object> healthcheck = (Map<String, Object>) db.get("healthcheck");
+		assertThat(healthcheck).containsKeys("start_period", "start_interval");
 	}
 
 	// ---- networks ----

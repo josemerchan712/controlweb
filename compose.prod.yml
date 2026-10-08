@@ -45,7 +45,8 @@ services:
     logging: *logging
     environment:
       SPRING_PROFILES_ACTIVE: prod
-      # PROVISIONAL JVM flags: the final -Xmx is decided after the 10-minute measurement (docs/DESPLIEGUE.md, C6).
+      # JVM flags decided after the 10-minute measurement (docs/DESPLIEGUE.md, "Medición de memoria"): -Xmx256m inside a
+      # 512 MiB container (measured peak RSS 361 MiB). Still overridable from .env.prod without rebuilding the image.
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:+UseSerialGC -Xms128m -Xmx256m -XX:MaxMetaspaceSize=160m -XX:ReservedCodeCacheSize=64m -Xss512k -XX:MaxDirectMemorySize=32m -XX:+ExitOnOutOfMemoryError}
       DB_URL: jdbc:postgresql://controlweb-db:5432/${DB_NAME:-controlweb}
       DB_USERNAME: ${DB_USERNAME:?DB_USERNAME is required (set it in .env.prod)}
@@ -104,7 +105,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 20s
+      start_period: 30s     # a first start also creates the cluster (initdb): ~10-20 s
+      start_interval: 2s
     networks:
       - controlweb_db
 

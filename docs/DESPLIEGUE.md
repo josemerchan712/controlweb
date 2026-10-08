@@ -197,6 +197,47 @@ Uso real esperado ≈ 1.250 MiB (≈ 2.500 MiB libres). Todo al límite ≈ 3.11
 seguridad (`apt`, `docker load`, `pg_dump`) y para que el OOM killer no elija la API de Rotten Odds. Efecto a conocer: los
 contenedores de Rotten Odds sin `memswap_limit` pueden usar swap antes de que los mate el OOM (más lentos en vez de muertos).
 
+### Medición de memoria y de arranque (C6, hecha el 2026-10-09)
+
+Condiciones: portátil con Docker Desktop (WSL2, VM de 3,7 GiB), la imagen construida del commit de C6, `compose.prod.yml` con el límite
+real de **512 MiB** para la aplicación y 256 MiB para PostgreSQL, **10 minutos** de medición, **29 sitios** cada 30 s (24 de
+`example.com|org|net`, los 3 propios y 2 inexistentes), tráfico sobre la API de lectura y algún login erróneo. JVM:
+`-XX:+UseSerialGC -Xms128m -Xmx256m -XX:MaxMetaspaceSize=160m -XX:ReservedCodeCacheSize=64m -Xss512k -XX:MaxDirectMemorySize=32m`.
+
+| Dato | Resultado |
+|---|---|
+| Memoria de la aplicación (`docker stats`) | 322 MiB al principio → 338 MiB al final, la curva se aplana |
+| Pico de RSS del proceso (`VmHWM`) | 370.140 kB ≈ **361,5 MiB** |
+| Pico del cgroup (`memory.peak`) | 360.501.248 bytes ≈ **343,8 MiB** |
+| PostgreSQL | 43 MiB (límite 256 MiB) |
+| `OOMKilled` / reinicios / avisos en el log | no / 0 / 0 |
+| Checks guardados / incidencias | 602 / 2 (las dos webs inexistentes) |
+| Arranque de la aplicación | 24 s |
+| Todo el stack sano (incluye crear la base de datos desde cero) | 56 s |
+
+**Decisión: se mantiene `-Xmx256m` y el límite de contenedor de 512 MiB.** Margen: 150 MiB (29 %) sobre el pico de RSS y 168 MiB
+sobre el pico del cgroup.
+
+Límites de esta medición (no se pueden ignorar):
+- Son solo 10 minutos. El heap pudo seguir creciendo después; no se observó cuánto heap tenía reservado ni usado al final (en
+  producción solo se expone `/actuator/health`, y la imagen no trae `jcmd`). Peor caso razonado: el RSS ya incluye el heap reservado
+  hasta ese momento; si este era de 128 MiB y llegara a su máximo de 256 MiB, el RSS subiría hasta unos 470 MiB, todavía por debajo de
+  512 MiB pero con solo ~40 MiB de margen. Es un peor caso poco probable (el conjunto vivo es pequeño), y por eso hay una
+  comprobación a la semana con un umbral y una acción concreta (S10).
+- Docker Desktop sobre WSL2, no un VPS Linux nativo: el consumo del propio runtime cambia, el de la JVM no demasiado.
+- La carga es mucho mayor que la real (29 sitios cada 30 s frente a 3 sitios cada 1-5 min).
+- No se ejercitó el job de retención (04:45), ni Telegram real, ni el heartbeat, ni tráfico real del endpoint público.
+
+Qué se hace con el resultado: la regla de S10 es **si `memory.peak` supera 440 MiB (86 % del límite), o hay un solo `OOMKilled` o
+reinicio, se sube el límite del contenedor a 640 MiB** (el reparto de la sección 7 admite +128 MiB: todos los límites suman unos
+3.240 MiB de 3.790) **sin tocar `-Xmx`**.
+
+Márgenes de arranque en el VPS: en el portátil la aplicación tarda 24 s. Se supone, con prudencia, hasta 3 veces más en el VPS
+(comparte dos vCPU con la pila de Rotten Odds): ≈ 75 s, y ≈ 170 s la primera vez (con la creación de la base de datos). Por eso:
+`HEALTHCHECK --start-period=120s` (los fallos dentro de ese periodo no cuentan), `--start-interval=5s` (durante el arranque se
+comprueba cada 5 s y el contenedor pasa a sano a los pocos segundos de estar listo, no a los 30 s del siguiente ciclo) y la espera de
+`deploy.sh` por defecto de **240 s** (la de Rotten Odds es de 180 s), configurable con `HEALTH_TIMEOUT`.
+
 ## 8. Despliegue y vuelta atrás
 
 `deploy/release.ps1` (PC): árbol limpio, en `main` y subido → construye `controlweb-app:<sha>` → `docker save -o` → `scp` →
@@ -403,8 +444,8 @@ imprimen), con `contents: read` y las acciones fijadas por SHA; ejecuta `verify-
 `controlweb_db` y la aplicación no está en ninguna red de Rotten Odds, de modo que no hay nombre que pueda resolverse a dos
 destinos. El volumen de datos se llama `controlweb_prod_pgdata` para no chocar con el volumen del PostgreSQL de desarrollo.
 
-*JVM:* las opciones (`JAVA_TOOL_OPTIONS`) están en el compose como **valor provisional** (`-Xmx256m` ...), sustituible desde `.env.prod`
-sin reconstruir; el valor final se decide con la medición de 10 minutos (`deploy/measure-memory.sh`).
+*JVM:* las opciones (`JAVA_TOOL_OPTIONS`) están en el compose con el valor **decidido tras la medición** (`-Xmx256m` en 512 MiB, ver «Medición de memoria»),
+sustituible desde `.env.prod` sin reconstruir.
 
 ## 13. Pasos
 
@@ -419,7 +460,7 @@ sin reconstruir; el valor final se decide con la medición de 10 minutos (`deplo
 | **C3 [CW]** ✅ | Heartbeat opcional (`app.heartbeat.url`, vacío = apagado) | Hecho: ver «Implementación de C3» | revert |
 | **C4 [CW]** *(omitido por ahora; ver S0)* | Mensaje "desafío de Cloudflare" | Tests | revert |
 | **C5 [CW]** ✅ | `application-prod.yml`, protecciones del perfil `prod`, Flyway `*:future`, cron de retención | Hecho: ver «Implementación de C5» | revert |
-| **C6 [CW]** | Dockerfile, `compose.prod.yml`, job de CI de la imagen | Hecho el código y las comprobaciones estáticas; ⏸ falta construir y medir (10 min, límite de 512 MiB) | revert |
+| **C6 [CW]** ✅ | Dockerfile, `compose.prod.yml`, job de CI de la imagen | Hecho; medido en el portátil (ver «Medición de memoria») | revert |
 | **C7 [CW]** | `deploy/` completo + shellcheck en CI | `bash -n`, shellcheck, revisión | revert |
 
 **Requisitos de C5 (añadidos al aprobar C1):**
@@ -477,7 +518,10 @@ sin reconstruir; el valor final se decide con la medición de 10 minutos (`deplo
   `Retry-After`; lo mismo cambiando `X-Forwarded-For` (sigue el 429); CORS de `/api/public/status` con el origen del portfolio
   (permitido) y con otro (no); `/api/sites` sin cabecera CORS desde el portfolio; `sudo reboot` (todo vuelve solo, firewall
   incluido); imagen rota a propósito (rollback automático); `deploy.sh rollback`; `restore-test`.
-- **S10 tras una semana:** `docker stats` y OOM/reinicios, swap usado (~0), tamaño de copias y de `checks`, siete copias
+- **S10 tras una semana:** **la curva de memoria** (la medición de C6 solo duró 10 minutos):
+  `docker exec controlweb-app cat /sys/fs/cgroup/memory.peak` (bytes; umbral 440 MiB = 461.373.440), `docker exec controlweb-app sh -c "awk '/^VmHWM/ {print \$2}' /proc/1/status"`
+  (kB), `docker stats --no-stream`, `docker inspect --format '{{.State.OOMKilled}} {{.RestartCount}}' controlweb-app`; si se supera el umbral o
+  hay un `OOMKilled`, subir el límite a 640 MiB (ver «Medición de memoria»). Además: `docker stats` y OOM/reinicios, swap usado (~0), tamaño de copias y de `checks`, siete copias
   verificadas (y las del PC), contadores `CW-EGRESS-DENY`, falsos positivos, heartbeat, caducidad del certificado, health de Rotten
   Odds, número de 429, log de retención a las 04:45 y PR de Dependabot.
 

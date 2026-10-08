@@ -126,6 +126,20 @@ class DockerfileGuardianTest {
 	}
 
 	@Test
+	@DisplayName("the health check leaves wide margin to start (>= 90 s, measured 24 s) and polls quickly while starting")
+	void healthCheckTiming() throws IOException {
+		String health = instructions("HEALTHCHECK").get(0);
+		Matcher period = Pattern.compile("--start-period=(\\d+)s").matcher(health);
+		Matcher startInterval = Pattern.compile("--start-interval=(\\d+)s").matcher(health);
+
+		assertThat(period.find()).as("--start-period in seconds").isTrue();
+		assertThat(Integer.parseInt(period.group(1))).isGreaterThanOrEqualTo(90);
+		assertThat(startInterval.find()).as("--start-interval in seconds").isTrue();
+		assertThat(Integer.parseInt(startInterval.group(1))).isBetween(1, 10);
+		assertThat(health).contains("--interval=30s").contains("--retries=3");
+	}
+
+	@Test
 	@DisplayName("the production profile is the default of the image, and no secret is baked into ENV or ARG")
 	void noSecretsInEnvOrArg() throws IOException {
 		String env = String.join("\n", instructions("ENV"));

@@ -45,9 +45,12 @@ USER 10001:10001
 EXPOSE 8080
 
 # No curl in this image: busybox wget is enough. /actuator/health answers {"status":"UP"} and nothing else (profile prod);
-# wget fails on a 4xx/5xx, so a DOWN health makes the container unhealthy. The long start period covers the JVM start,
-# the Flyway migrations and the first scheduler cycle.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+# wget fails on a 4xx/5xx, so a DOWN health makes the container unhealthy.
+# Timing, measured on a laptop (Docker Desktop, 29 sites): the application is up in 24 s. On the VPS, sharing two vCPUs with
+# another stack, assume up to 3x that: ~75 s. The start period (120 s) is well above it, failures inside it do not count, and
+# during it the check runs every 5 s (--start-interval), so the container turns healthy within seconds of being ready
+# instead of waiting for the next 30 s tick.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --start-interval=5s --retries=3 \
   CMD wget -q -O /dev/null http://127.0.0.1:8080/actuator/health || exit 1
 
 # JVM flags come from JAVA_TOOL_OPTIONS (set in compose.prod.yml), so they can be tuned without rebuilding.

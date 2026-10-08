@@ -348,7 +348,7 @@ blanca en `.dockerignore`), `compose.prod.yml` (sin valores secretos: todo `${X:
 redes `controlweb_proxy` (externa), `controlweb_db` (interna) y `controlweb_egress`), `deploy/verify-image.sh`,
 `deploy/verify-container.sh`, `deploy/measure-memory.sh` y el job `image` de CI (construye sin publicar y arranca el stack con el
 perfil `prod`). `DockerfileGuardianTest` y `ComposeProdGuardianTest` vigilan los dos ficheros sin Docker. Los comandos `docker inspect`
-que comprueban cada medida están en `docs/DESPLIEGUE.md`. El `-Xmx` del compose es provisional hasta la medición. Al cambiar de versión
+que comprueban cada medida están en `docs/DESPLIEGUE.md`. `-Xmx256m` en 512 MiB está decidido con una medición real (pico de RSS 361 MiB en 10 min; ver `docs/DESPLIEGUE.md`, «Medición de memoria»), con una comprobación a la semana (umbral 440 MiB → subir el límite a 640 MiB). Al cambiar de versión
 una imagen base hay que cambiar etiqueta **y** digest (Dependabot lo hace).
 
 ## Perfil `prod` (fase 2, paso C5)
