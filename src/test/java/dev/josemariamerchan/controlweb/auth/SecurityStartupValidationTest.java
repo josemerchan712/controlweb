@@ -16,6 +16,7 @@ import org.springframework.context.annotation.Configuration;
 import dev.josemariamerchan.controlweb.auth.config.AdminProperties;
 import dev.josemariamerchan.controlweb.auth.config.JwtProperties;
 import dev.josemariamerchan.controlweb.config.CorsProperties;
+import dev.josemariamerchan.controlweb.config.PublicProperties;
 import dev.josemariamerchan.controlweb.config.InvalidSecurityConfigurationException;
 import dev.josemariamerchan.controlweb.config.InvalidSecurityConfigurationFailureAnalyzer;
 
@@ -29,7 +30,7 @@ class SecurityStartupValidationTest {
 	private static final String GOOD_PASSWORD = "a-long-enough-password";
 
 	@Configuration(proxyBeanMethods = false)
-	@EnableConfigurationProperties({ JwtProperties.class, AdminProperties.class, CorsProperties.class })
+	@EnableConfigurationProperties({ JwtProperties.class, AdminProperties.class, CorsProperties.class, PublicProperties.class })
 	static class PropertiesOnly {
 	}
 
@@ -163,6 +164,42 @@ class SecurityStartupValidationTest {
 
 		runner.withPropertyValues("app.cors.allowed-origins=")
 				.run(context -> assertThat(context.getBean(CorsProperties.class).allowedOrigins()).isEmpty());
+	}
+
+	// ---- PUBLIC_CORS_ALLOWED_ORIGINS (the public status endpoint) ----
+
+	@ParameterizedTest(name = "public CORS origin \"{0}\" is rejected")
+	@ValueSource(strings = { "*", "https://*.example.com", "https://portfolio.example.com/status", "portfolio.example.com", "ftp://example.com",
+			"https://ok.example.com,*" })
+	void rejectsWildcardsAndMalformedPublicOrigins(String origin) {
+		runner.withPropertyValues("app.public.cors-allowed-origins=" + origin).run(context -> assertThat(context)
+				.hasFailed().getFailure().rootCause()
+				.isInstanceOf(InvalidSecurityConfigurationException.class)
+				.hasMessageContaining("PUBLIC_CORS_ALLOWED_ORIGINS"));
+	}
+
+	@Test
+	@DisplayName("exact public origins are accepted; empty means no browser access to the public endpoint")
+	void acceptsExactPublicOrigins() {
+		runner.withPropertyValues("app.public.cors-allowed-origins=https://portfolio.example.com, http://localhost:3000")
+				.run(context -> assertThat(context.getBean(PublicProperties.class).corsAllowedOrigins())
+						.containsExactly("https://portfolio.example.com", "http://localhost:3000"));
+		runner.withPropertyValues("app.public.cors-allowed-origins=")
+				.run(context -> assertThat(context.getBean(PublicProperties.class).corsAllowedOrigins()).isEmpty());
+	}
+
+	@Test
+	@DisplayName("the public cache settings have defaults (15 s / 30 s) and sane limits")
+	void publicCacheSettings() {
+		runner.run(context -> {
+			PublicProperties properties = context.getBean(PublicProperties.class);
+			assertThat(properties.cacheTtl()).isEqualTo(java.time.Duration.ofSeconds(15));
+			assertThat(properties.browserMaxAge()).isEqualTo(java.time.Duration.ofSeconds(30));
+		});
+		for (String bad : new String[] { "app.public.cache-ttl=-1s", "app.public.cache-ttl=11m", "app.public.browser-max-age=-1s",
+				"app.public.browser-max-age=2h" }) {
+			runner.withPropertyValues(bad).run(context -> assertThat(context).as(bad).hasFailed());
+		}
 	}
 
 	// ---- no accidental leaks, readable failure ----

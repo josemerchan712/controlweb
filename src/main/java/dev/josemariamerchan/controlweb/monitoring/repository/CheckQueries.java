@@ -7,7 +7,9 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -58,6 +60,16 @@ public class CheckQueries {
 			  and checked_at <= :windowEnd
 			""";
 
+	/** Uptime of several sites at once; a site without checks in the window simply has no row (no invented 100 %). */
+	private static final String UPTIME_PER_SITE = """
+			select site_id, round(100.0 * count(*) filter (where up) / count(*), 2) as uptime_percent
+			from checks
+			where site_id in (:siteIds)
+			  and checked_at >= :windowStart
+			  and checked_at <= :windowEnd
+			group by site_id
+			""";
+
 	private final JdbcClient jdbc;
 
 	public CheckQueries(JdbcClient jdbc) {
@@ -74,6 +86,23 @@ public class CheckQueries {
 						integer(rs, "status_code"), integer(rs, "latency_ms"), instant(rs, "checked_at"),
 						instant(rs, "cert_expires_at")))
 				.list();
+	}
+
+	/** Uptime percent (two decimals) per site over the closed window, for the sites that have checks in it. One statement. */
+	public Map<Long, BigDecimal> uptimePerSite(Collection<Long> siteIds, Instant windowStart, Instant windowEnd) {
+		if (siteIds.isEmpty()) {
+			return Map.of();
+		}
+		Map<Long, BigDecimal> uptimes = new HashMap<>();
+		jdbc.sql(UPTIME_PER_SITE)
+				.param("siteIds", siteIds)
+				.param("windowStart", OffsetDateTime.ofInstant(windowStart, ZoneOffset.UTC))
+				.param("windowEnd", OffsetDateTime.ofInstant(windowEnd, ZoneOffset.UTC))
+				.query((rs, rowNumber) -> {
+					uptimes.put(rs.getLong("site_id"), rs.getBigDecimal("uptime_percent"));
+					return null;
+				}).list();
+		return uptimes;
 	}
 
 	/** Statistics over {@code windowStart <= checked_at <= windowEnd}. Always returns exactly one row. */

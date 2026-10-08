@@ -38,7 +38,8 @@ class ApiSecurityGuardTest {
 
 	/** The ONLY public API endpoints. Adding to this list is a conscious security decision. */
 	private static boolean isPublic(HttpMethod method, String pattern) {
-		return (method == HttpMethod.POST && pattern.equals("/api/auth/login")) || pattern.startsWith("/api/public/");
+		return (method == HttpMethod.POST && pattern.equals("/api/auth/login"))
+				|| (method == HttpMethod.GET && pattern.equals("/api/public/status"));
 	}
 
 	private record Endpoint(HttpMethod method, String pattern) {
@@ -90,7 +91,7 @@ class ApiSecurityGuardTest {
 		assertThat(found).contains("POST /api/auth/login", "GET /api/auth/me", "GET /api/sites", "POST /api/sites",
 				"GET /api/sites/{id}", "PUT /api/sites/{id}", "DELETE /api/sites/{id}", "POST /api/sites/{id}/check", "GET /api/sites/{siteId}/rules",
 				"PUT /api/sites/{siteId}/rules/{type}", "POST /api/alerts/test", "GET /api/status",
-				"GET /api/sites/{siteId}/checks", "GET /api/sites/{siteId}/stats", "GET /api/incidents", "GET /api/incidents/{id}");
+				"GET /api/sites/{siteId}/checks", "GET /api/sites/{siteId}/stats", "GET /api/incidents", "GET /api/incidents/{id}", "GET /api/public/status");
 	}
 
 	@Test
@@ -145,7 +146,8 @@ class ApiSecurityGuardTest {
 	@Test
 	@DisplayName("unknown /api paths and the root are also 401 without a token (default deny)")
 	void unknownPathsAreDeniedByDefault() throws Exception {
-		for (String path : List.of("/api/does-not-exist", "/api/sites/1/anything", "/", "/anything", "/error", "/actuator/env")) {
+		for (String path : List.of("/api/does-not-exist", "/api/sites/1/anything", "/", "/anything", "/error", "/actuator/env",
+				"/api/public", "/api/public/", "/api/public/other", "/api/public/status/extra")) {
 			assertThat(mvc.perform(get(path)).andReturn().getResponse().getStatus()).as(path).isEqualTo(401);
 		}
 	}

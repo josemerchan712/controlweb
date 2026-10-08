@@ -94,6 +94,16 @@ class FailFastStartupTest {
 	}
 
 	@Test
+	@DisplayName("a wildcard in PUBLIC_CORS_ALLOWED_ORIGINS prevents startup too, naming that variable")
+	void wildcardPublicCors(CapturedOutput output) {
+		assertThatThrownBy(() -> start("app.jwt.secret=" + SECRET_32_BYTES, "app.admin.email=admin@example.com",
+				"app.admin.password=long-enough-password", "app.public.cors-allowed-origins=*"))
+				.hasRootCauseInstanceOf(InvalidSecurityConfigurationException.class);
+
+		assertThat(output.getAll()).contains("PUBLIC_CORS_ALLOWED_ORIGINS");
+	}
+
+	@Test
 	@DisplayName("control: with valid settings the very same application starts")
 	void validSettingsStart() {
 		try (ConfigurableApplicationContext context = start("app.jwt.secret=" + SECRET_32_BYTES,

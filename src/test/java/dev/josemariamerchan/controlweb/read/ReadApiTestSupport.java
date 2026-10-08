@@ -23,7 +23,7 @@ import dev.josemariamerchan.controlweb.site.repository.SiteRepository;
  * Seeding helpers for the read-API integration tests. Subclasses carry the Spring Boot test annotations
  * ({@code @SpringBootTest @AutoConfigureMockMvc @Import(TestcontainersConfiguration.class)}).
  */
-abstract class ReadApiTestSupport {
+public abstract class ReadApiTestSupport {
 
 	/** All the seeded data is relative to this moment, which is also where the test clock is fixed. */
 	protected static final Instant NOW = Instant.parse("2026-03-01T12:00:00Z");
@@ -44,7 +44,7 @@ abstract class ReadApiTestSupport {
 	protected TestClock clock;
 
 	@AfterEach
-	void cleanUpReadApiData() {
+	protected void cleanUpReadApiData() {
 		clock.reset();
 		sites.deleteAll(); // checks, rules and incidents go with them (ON DELETE CASCADE)
 	}
@@ -54,8 +54,16 @@ abstract class ReadApiTestSupport {
 	}
 
 	protected Site site(String name, boolean active) {
+		return site(name, active, false);
+	}
+
+	protected Site site(String name, boolean active, boolean publicVisible) {
 		String url = "https://site-%d.example.com".formatted(UNIQUE.incrementAndGet());
-		return sites.saveAndFlush(new Site(name, url, 60, active, false, NOW.minusSeconds(86_400L * 365)));
+		return site(name, url, active, publicVisible);
+	}
+
+	protected Site site(String name, String url, boolean active, boolean publicVisible) {
+		return sites.saveAndFlush(new Site(name, url, 60, active, publicVisible, NOW.minusSeconds(86_400L * 365)));
 	}
 
 	protected Check up(Site site, Instant at, int latencyMs) {

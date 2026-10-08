@@ -45,7 +45,8 @@ docker compose down                # parar la base de datos
 - Paso 5 (scheduler + comprobación manual): hecho.
 - Paso 6 (motor de reglas, incidencias y eventos + API de reglas): hecho.
 - Paso 7 (alertas por Telegram): hecho.
-- Paso 8 (API de lectura: estado, histórico, estadísticas, incidencias): hecho. Siguiente: paso 9 (endpoint público de estado).
+- Paso 8 (API de lectura: estado, histórico, estadísticas, incidencias): hecho.
+- Paso 9 (endpoint público de estado): hecho. Siguiente: paso 10 (pulido: retención de checks, OpenAPI, CI, README final).
 
 ## CRUD de sitios y SSRF (paso 2)
 - `SiteUrlNormalizer` canonicaliza la URL antes de guardar (esquema y host en minúsculas, sin punto final en el host,
@@ -109,6 +110,36 @@ guardarlo también en checks fallidos por HTTP, p. ej. un 503 con certificado v�
 - **Tests** sin WireMock ni archivos de claves: servidores `com.sun.net.httpserver` (HTTP/HTTPS) y certificados EC generados
   en memoria con BouncyCastle (solo `test`): CA de confianza, hoja válida, caducada, aún no válida, host incorrecto y CA
   desconocida (`TestServer`, `TestPki`).
+
+## Endpoint público (paso 9)
+`GET /api/public/status` es el ÚNICO endpoint de datos sin token (aparte de login y `/actuator/health`). Prioridad absoluta:
+no filtrar nada.
+- **Solo se leen datos públicos** (`PublicStatusLoader`): la primera consulta pide únicamente `public_visible AND active` y las
+  demás se restringen a esos ids; el estado global sale de esos mismos sitios. Un sitio privado nunca entra en memoria, así que
+  no puede influir en la respuesta (test: un sitio privado que cae deja la respuesta idéntica byte a byte). Siempre 4 sentencias.
+- **Lista blanca estricta**: `{status, generatedAt, sites[{name, status, uptime30d}]}`. Sin URL, ids, latencias, textos de
+  incidencias ni fechas de certificado. `PublicSiteView` solo tiene 3 campos; el test compara el conjunto EXACTO de claves JSON
+  (añadir un campo rompe el build) y otro siembra URL, host, textos de error/incidencia y latencias reconocibles y comprueba que
+  no aparecen en el cuerpo.
+- **Estados** (`PublicState`): el estado derivado del paso 8 colapsado: UP, DEGRADED, DOWN; `PENDING` → UNKNOWN; los inactivos no
+  salen. **Estado global**: sin sitios (o ninguno con estado conocido) → UNKNOWN; todos los conocidos DOWN → DOWN; algún DOWN o
+  DEGRADED pero no todos caídos → DEGRADED (caída parcial); si no, UP. Los UNKNOWN se ignoran si hay alguno conocido. Sin sitios
+  públicos: 200 con lista vacía y UNKNOWN. `uptime30d` = correctos/todos en `[ahora-30d, ahora]`, 2 decimales, `null` sin checks.
+- **Caché** (`PublicStatusCache`, `app.public.cache-ttl` 15 s, con el `Clock`): una sola recarga a la vez (single flight) aunque
+  lleguen cientos de peticiones; N peticiones dentro del TTL cuestan 0 sentencias adicionales. Si una recarga falla se sirve la
+  última respuesta buena hasta 10×TTL (su `generatedAt` dice la verdad sobre su edad); sin respuesta reciente → 503 genérico con
+  `Retry-After`. `generatedAt` es cuándo se leyó de la BD.
+- **Seguridad**: solo la ruta EXACTA `/api/public/status` es pública (cualquier otra bajo `/api/public/` da 401 y un `POST` a esa
+  ruta da 405). El filtro de tokens IGNORA la cabecera `Authorization` en esa ruta (un token caducado/basura no rompe la página
+  pública; en el resto de rutas sigue siendo 401). `Cache-Control: public, max-age=30` solo en la respuesta 200 (los errores
+  mantienen el no-cache de Spring Security), `X-Content-Type-Options: nosniff`, sin `Set-Cookie`. Errores como `ProblemDetail`:
+  `GlobalExceptionHandler` tiene ahora una red final (`Exception` → 500 con mensaje fijo, sin clase/SQL/rutas) y un 503 genérico.
+- **CORS propio** (`app.public.cors-allowed-origins` / `PUBLIC_CORS_ALLOWED_ORIGINS`): solo GET, sin credenciales, sin cabeceras
+  extra, orígenes exactos; `*` o una ruta impiden arrancar (como `CORS_ALLOWED_ORIGINS`). Es independiente del CORS privado: el
+  portfolio no puede llamar a la API privada ni el dashboard a la pública salvo que estén en ambas listas. Se registra antes que
+  `/api/**` porque `UrlBasedCorsConfigurationSource` usa la primera coincidencia.
+- Mutaciones verificadas: añadir la URL a la respuesta hace fallar los 2 tests de lista blanca; incluir sitios privados en el
+  global hace fallar el test del punto 3 (y su variante sin sitios públicos).
 
 ## API de lectura (paso 8)
 Todos los endpoints exigen JWT (el guardián los cubre), son solo `GET`, devuelven **DTOs (records), nunca entidades**, y no

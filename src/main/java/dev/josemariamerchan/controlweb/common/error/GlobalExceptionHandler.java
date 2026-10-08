@@ -3,6 +3,8 @@ package dev.josemariamerchan.controlweb.common.error;
 import java.util.Map;
 import java.util.TreeMap;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -18,10 +20,12 @@ import dev.josemariamerchan.controlweb.alert.service.AlertDeliveryException;
 import dev.josemariamerchan.controlweb.alert.service.AlertRateLimitedException;
 import dev.josemariamerchan.controlweb.auth.service.InvalidCredentialsException;
 import dev.josemariamerchan.controlweb.common.net.UnsafeHostException;
+import dev.josemariamerchan.controlweb.common.text.MessageSanitizer;
 import dev.josemariamerchan.controlweb.common.web.InvalidQueryException;
 import dev.josemariamerchan.controlweb.incident.service.IncidentNotFoundException;
 import dev.josemariamerchan.controlweb.incident.service.InvalidRuleException;
 import dev.josemariamerchan.controlweb.monitoring.service.CheckInProgressException;
+import dev.josemariamerchan.controlweb.publicstatus.PublicStatusUnavailableException;
 import dev.josemariamerchan.controlweb.site.service.DuplicateSiteException;
 import dev.josemariamerchan.controlweb.site.service.InvalidSiteUrlException;
 import dev.josemariamerchan.controlweb.site.service.SiteNotFoundException;
@@ -33,6 +37,8 @@ import dev.josemariamerchan.controlweb.site.service.SiteNotFoundException;
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
+
+	private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
 	@Override
 	protected ResponseEntity<Object> handleMethodArgumentNotValid(MethodArgumentNotValidException ex,
@@ -54,6 +60,22 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 	@ExceptionHandler({ SiteNotFoundException.class, IncidentNotFoundException.class })
 	ProblemDetail handleNotFound(RuntimeException ex) {
 		return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
+	}
+
+	@ExceptionHandler(PublicStatusUnavailableException.class)
+	ResponseEntity<ProblemDetail> handlePublicStatusUnavailable(PublicStatusUnavailableException ex) {
+		return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).header(HttpHeaders.RETRY_AFTER, "15")
+				.body(ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage()));
+	}
+
+	/**
+	 * The last line of defence: anything unexpected is a 500 with a fixed message. Nothing about the failure (class,
+	 * message, SQL, paths) goes to the client; it is logged server-side by type and sanitized message only.
+	 */
+	@ExceptionHandler(Exception.class)
+	ProblemDetail handleUnexpected(Exception ex) {
+		log.error("Unexpected error: {} {}", ex.getClass().getName(), MessageSanitizer.sanitize(ex.getMessage()));
+		return ProblemDetail.forStatusAndDetail(HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred");
 	}
 
 	@ExceptionHandler(AlertDeliveryException.class)

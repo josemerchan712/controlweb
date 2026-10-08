@@ -25,6 +25,7 @@ public class SecuritySettingsValidator implements EnvironmentPostProcessor, Orde
 		binder.bindOrCreate("app.jwt", JwtProperties.class);
 		binder.bindOrCreate("app.admin", AdminProperties.class);
 		binder.bindOrCreate("app.cors", CorsProperties.class);
+		binder.bindOrCreate("app.public", PublicProperties.class);
 	}
 
 	@Override

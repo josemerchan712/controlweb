@@ -1,5 +1,6 @@
 package dev.josemariamerchan.controlweb.incident.repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -34,6 +35,15 @@ public interface IncidentRepository extends JpaRepository<Incident, Long>, JpaSp
 			order by i.openedAt, i.id
 			""")
 	List<OpenIncidentRow> findAllOpenRows();
+
+	/** The open incidents of just these sites, as light rows (the public page never reads other sites' incidents). */
+	@Query("""
+			select new dev.josemariamerchan.controlweb.incident.repository.OpenIncidentRow(i.site.id, i.type, i.openedAt)
+			from Incident i
+			where i.resolvedAt is null and i.site.id in :siteIds
+			order by i.openedAt, i.id
+			""")
+	List<OpenIncidentRow> findOpenRowsForSites(@Param("siteIds") Collection<Long> siteIds);
 
 	/** A filtered page of incidents WITH their site loaded in the same statement (no query per row). */
 	@Override

@@ -3,6 +3,7 @@ package dev.josemariamerchan.controlweb.site.repository;
 import java.time.Instant;
 import java.util.List;
 
+import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -14,6 +15,9 @@ public interface SiteRepository extends JpaRepository<Site, Long> {
 	boolean existsByUrl(String url);
 
 	boolean existsByUrlAndIdNot(String url, Long id);
+
+	/** Only the sites meant for the PUBLIC status page: shown publicly AND being monitored. Nothing else is read. */
+	List<Site> findByPublicVisibleTrueAndActiveTrue(Sort sort);
 
 	/**
 	 * Ids of the active sites whose next check is due at {@code now}: never checked, or checked at least

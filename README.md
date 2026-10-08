@@ -50,7 +50,7 @@ $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create
 ```
 
 ## API (resumen)
-Todo bajo `/api` requiere `Authorization: Bearer <token>` salvo el login. Los errores son `application/problem+json`.
+Todo bajo `/api` requiere `Authorization: Bearer <token>` salvo el login y `/api/public/status`. Los errores son `application/problem+json`.
 
 | Endpoint | Descripción |
 |---|---|
@@ -63,11 +63,24 @@ Todo bajo `/api` requiere `Authorization: Bearer <token>` salvo el login. Los er
 | `GET /api/sites/{id}/stats?period=24h\|7d\|30d` | Uptime %, latencia media y p95 |
 | `GET /api/incidents?status&siteId&page&size`, `GET /api/incidents/{id}` | Incidencias |
 | `POST /api/alerts/test` | Mensaje de prueba por Telegram |
+| `GET /api/public/status` | **Sin token.** Estado público para tu portfolio: solo nombre, estado y uptime de 30 días de los sitios marcados como públicos |
 
 ```powershell
 $h = @{ Authorization = "Bearer $($login.token)" }
 Invoke-RestMethod -Uri http://localhost:8080/api/status -Headers $h
 Invoke-RestMethod -Uri "http://localhost:8080/api/sites/1/stats?period=7d" -Headers $h
+```
+
+## Página de estado pública
+`GET /api/public/status` no necesita token y es lo que puede consumir tu portfolio. Solo muestra los sitios con
+`publicVisible: true` que estén activos, y de cada uno únicamente su **nombre, su estado (UP, DEGRADED, DOWN, UNKNOWN) y su
+uptime de 30 días**; nunca URLs, ids, latencias ni detalles. El estado global se calcula solo con esos sitios, así que un
+sitio privado caído no cambia nada. La respuesta se guarda 15 segundos en memoria para no cargar la base de datos.
+
+Para llamarla desde el navegador, pon el origen de tu portfolio (exacto, sin comodín) en `PUBLIC_CORS_ALLOWED_ORIGINS`.
+
+```powershell
+Invoke-RestMethod http://localhost:8080/api/public/status
 ```
 
 ## Alertas por Telegram

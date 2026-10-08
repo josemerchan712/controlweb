@@ -5,6 +5,9 @@ app:
     allow-private-hosts: true
   cors:
     allowed-origins: http://localhost:5173
+  public:
+    # The portfolio origin allowed to read the public status page from a browser.
+    cors-allowed-origins: https://portfolio.test
   scheduler:
     # No background cycle during tests; they call CheckRunner.runCycle() themselves.
     enabled: false
