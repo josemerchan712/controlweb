@@ -1,7 +1,7 @@
 # Development database only. One PostgreSQL 16 with a small memory footprint.
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     container_name: controlweb-postgres
     restart: unless-stopped
     environment:
