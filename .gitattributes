@@ -1,2 +1,8 @@
 /mvnw text eol=lf
 *.cmd text eol=crlf
+
+# Files whose line endings matter to the tools that read them (Docker, bash, YAML for Compose)
+Dockerfile text eol=lf
+*.sh text eol=lf
+.dockerignore text eol=lf
+compose*.yml text eol=lf

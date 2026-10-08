@@ -1,0 +1,7 @@
+# Whitelist: nothing enters the build context unless it is listed below.
+# This keeps .env files, .git, docs/, the tests, IDE files and target/ out of the image (and the context small).
+**
+!pom.xml
+!mvnw
+!.mvn/**
+!src/main/**
