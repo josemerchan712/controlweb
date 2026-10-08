@@ -16,6 +16,7 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
 
 import dev.josemariamerchan.controlweb.auth.service.InvalidCredentialsException;
 import dev.josemariamerchan.controlweb.common.net.UnsafeHostException;
+import dev.josemariamerchan.controlweb.incident.service.InvalidRuleException;
 import dev.josemariamerchan.controlweb.monitoring.service.CheckInProgressException;
 import dev.josemariamerchan.controlweb.site.service.DuplicateSiteException;
 import dev.josemariamerchan.controlweb.site.service.InvalidSiteUrlException;
@@ -61,7 +62,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 		return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
 	}
 
-	@ExceptionHandler({ InvalidSiteUrlException.class, UnsafeHostException.class })
+	@ExceptionHandler({ InvalidSiteUrlException.class, UnsafeHostException.class, InvalidRuleException.class })
 	ProblemDetail handleBadSiteTarget(RuntimeException ex) {
 		return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
 	}

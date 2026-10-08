@@ -4,11 +4,15 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import dev.josemariamerchan.controlweb.common.text.MessageSanitizer;
+import dev.josemariamerchan.controlweb.incident.service.IncidentService;
 import dev.josemariamerchan.controlweb.monitoring.checker.CheckResult;
 import dev.josemariamerchan.controlweb.monitoring.checker.HttpSiteChecker;
 import dev.josemariamerchan.controlweb.monitoring.domain.Check;
@@ -24,23 +28,29 @@ import dev.josemariamerchan.controlweb.site.service.SiteNotFoundException;
  * <p>This class is deliberately NOT {@code @Transactional}. A check involves a slow network call and
  * must not hold a transaction (and therefore a pooled database connection) while it waits, so the
  * work is split in three: a short read transaction that gets the URL, the network check with no
- * transaction at all, and a short write transaction that saves the result.
+ * transaction at all, and a short write transaction that saves the result. The alert rules are
+ * evaluated afterwards, in yet another short transaction, so a failure of the rule engine can never
+ * lose a check that was already stored.
  */
 @Service
 public class CheckService {
 
+	private static final Logger log = LoggerFactory.getLogger(CheckService.class);
+
 	private final SiteRepository sites;
 	private final CheckRepository checks;
 	private final HttpSiteChecker checker;
+	private final IncidentService incidentService;
 	private final Clock clock;
 	private final TransactionTemplate writeTransaction;
 	private final TransactionTemplate readTransaction;
 
 	public CheckService(SiteRepository sites, CheckRepository checks, HttpSiteChecker checker,
-			PlatformTransactionManager transactionManager, Clock clock) {
+			IncidentService incidentService, PlatformTransactionManager transactionManager, Clock clock) {
 		this.sites = sites;
 		this.checks = checks;
 		this.checker = checker;
+		this.incidentService = incidentService;
 		this.clock = clock;
 		this.writeTransaction = new TransactionTemplate(transactionManager);
 		this.readTransaction = new TransactionTemplate(transactionManager);
@@ -71,7 +81,20 @@ public class CheckService {
 		Instant checkedAt = clock.instant();
 		CheckResult result = checker.check(target.url()); // no transaction, no database connection held here
 
-		return save(siteId, checkedAt, result);
+		CheckResponse response = save(siteId, checkedAt, result);
+		evaluateRules(siteId);
+		return response;
+	}
+
+	/** After the check is safely stored. Whatever goes wrong here is logged and never reaches the caller. */
+	private void evaluateRules(Long siteId) {
+		try {
+			incidentService.evaluate(siteId);
+		}
+		catch (RuntimeException ex) {
+			log.warn("Rule evaluation failed for site {}: {} {}", siteId, ex.getClass().getName(),
+					MessageSanitizer.sanitize(ex.getMessage()));
+		}
 	}
 
 	private CheckResponse save(Long siteId, Instant checkedAt, CheckResult result) {

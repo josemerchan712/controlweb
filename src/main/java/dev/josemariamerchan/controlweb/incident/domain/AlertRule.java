@@ -49,6 +49,14 @@ public class AlertRule {
 		this.threshold = threshold;
 	}
 
+	/** Changes the threshold and, when given, whether the rule is active. Takes effect at the next check. */
+	public void update(int threshold, Boolean enabled) {
+		this.threshold = threshold;
+		if (enabled != null) {
+			this.enabled = enabled;
+		}
+	}
+
 	public Long getId() {
 		return id;
 	}

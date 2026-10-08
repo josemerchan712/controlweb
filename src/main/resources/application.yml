@@ -45,6 +45,10 @@ app:
     fixed-delay: 10s       # pause between the END of a cycle and the start of the next
     max-concurrency: 10    # checks running at the same time
     shutdown-timeout: 10s  # wait for running checks when the application stops
+  rules:
+    # HIGH_LATENCY opens only when this many CONSECUTIVE successful checks all exceed the threshold
+    # (so a single spike never opens an incident).
+    latency-samples: 3
   # Thresholds of the alert rules created for every new site.
   alert-defaults:
     down-consecutive-failures: 2

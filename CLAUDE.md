@@ -42,7 +42,8 @@ docker compose down                # parar la base de datos
 - Paso 2 (CRUD de sitios + protección SSRF): hecho.
 - Paso 3 (seguridad JWT): hecho.
 - Paso 4 (checker HTTP + SSL): hecho.
-- Paso 5 (scheduler + comprobación manual): hecho. Siguiente: paso 6 (motor de reglas e incidencias).
+- Paso 5 (scheduler + comprobación manual): hecho.
+- Paso 6 (motor de reglas, incidencias y eventos + API de reglas): hecho. Siguiente: paso 7 (alertas por Telegram).
 
 ## CRUD de sitios y SSRF (paso 2)
 - `SiteUrlNormalizer` canonicaliza la URL antes de guardar (esquema y host en minúsculas, sin punto final en el host,
@@ -106,6 +107,43 @@ guardarlo también en checks fallidos por HTTP, p. ej. un 503 con certificado v�
 - **Tests** sin WireMock ni archivos de claves: servidores `com.sun.net.httpserver` (HTTP/HTTPS) y certificados EC generados
   en memoria con BouncyCastle (solo `test`): CA de confianza, hoja válida, caducada, aún no válida, host incorrecto y CA
   desconocida (`TestServer`, `TestPki`).
+
+## Reglas, incidencias y eventos (paso 6)
+- **`RuleEngine`** (`incident/rules`) es Java puro: sin Spring, sin datos, sin reloj, sin estado (un test lo verifica por
+  reflexión). Recibe un `RuleInput` (ahora, sitio activo, reglas, checks recientes NUEVO→VIEJO, tipos con incidencia abierta)
+  y devuelve `Decision.Open/Close`. Como las incidencias abiertas forman parte de la entrada y todo se lee de la BD, un
+  reinicio no cambia nada y evaluar dos veces lo mismo no duplica nada (idempotente).
+- **DOWN**: abre tras `threshold` fallos consecutivos (con menos checks no se confirma); cierra con el primer check correcto.
+  **HIGH_LATENCY**: abre cuando los últimos `app.rules.latency-samples` (3) checks CORRECTOS superan el umbral (> ms); un
+  pico suelto no abre; los fallidos no cuentan como latencia; cierra cuando el último correcto es <= umbral.
+  **SSL_EXPIRING**: usa el `cert_expires_at` del último check que lo tenga; abre si quedan menos de `threshold` días (o ya
+  caducó); cierra al renovarse; sin información de certificado no hace nada. Un certificado caducado que hace fallar los
+  checks genera ADEMÁS la incidencia DOWN (correcto).
+- **Regla desactivada o ausente**: no abre y cierra la incidencia abierta de su tipo ("Rule disabled").
+  **Sitio inactivo**: no se evalúa; cierra todas sus incidencias ("Site deactivated").
+- **Orden de evaluación**: `CheckService` guarda el `Check` (su tx) y DESPUÉS llama a `IncidentService.evaluate` en otra tx
+  corta, dentro de un `try/catch`: un fallo del motor nunca pierde el check ni rompe el check manual. Ventana de checks
+  leídos = `max(50, umbral DOWN)`.
+- **Aplicación**: `IncidentService` lee en una tx de solo lectura y aplica CADA decisión con `IncidentWriter` en su propia
+  tx (`REQUIRES_NEW`): en PostgreSQL una violación aborta toda la transacción, así solo se revierte esa decisión. Si dos
+  evaluaciones compiten por abrir, el índice único parcial deja pasar una; la otra recibe `DataIntegrityViolationException`,
+  se captura y no hay evento. El cierre usa `SELECT ... FOR UPDATE`: dos cierres concurrentes producen un solo cierre y un
+  solo evento (hay tests de ambas carreras y una mutación que lo demuestra).
+- **Eventos**: `IncidentOpened` / `IncidentResolved` (llevan el NOMBRE del sitio, nunca su URL; el de resolución lleva la
+  duración). Se publican dentro de la tx del writer; los consumidores deben usar
+  `@TransactionalEventListener(AFTER_COMMIT)` (lo hace `IncidentLogListener`; el notificador de Telegram del paso 7 hará lo
+  mismo). Los timestamps de `Incident` se truncan a microsegundos (precisión de PostgreSQL) para que evento y fila coincidan.
+- **`details`**: <= 500 caracteres, sin query strings ni credenciales de URL (`MessageSanitizer` en `common/text`), y al
+  cerrar se añade `| Closed: <motivo>` conservando siempre el motivo.
+- **Desactivar un sitio** (`SiteService.update`, active true→false) cierra sus incidencias en la MISMA transacción
+  (`IncidentWriter.closeAllOpen`, `REQUIRED`), no en el siguiente ciclo.
+- **API de reglas**: `GET /api/sites/{id}/rules` y `PUT /api/sites/{id}/rules/{type}` (`threshold` obligatorio; rangos: DOWN
+  1-100, HIGH_LATENCY 1-600000 ms, SSL_EXPIRING 1-365 días; `enabled` opcional). 404 si el sitio no existe, 400 si el
+  tipo o el umbral no son válidos. Cambiar una regla NO reevalúa: se aplica en el siguiente check.
+- Tests: tabla de casos del motor (`RuleEngineTest`, con repeticiones paso a paso para el flapping), integración con
+  PostgreSQL del ciclo completo (fallo, fallo, DOWN abierta, correcto, cerrada), carreras, idempotencia tras "reinicio",
+  desactivación y API de reglas. `IncidentEventRecorder` (en `TestcontainersConfiguration`) registra los eventos como los
+  vería un listener AFTER_COMMIT.
 
 ## Scheduler y comprobación manual (paso 5)
 - **Trigger**: `CheckScheduler` con `@Scheduled(fixedDelay)` (NO `fixedRate`; un test inspecciona la tarea registrada).

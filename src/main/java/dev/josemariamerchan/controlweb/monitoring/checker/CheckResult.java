@@ -2,6 +2,8 @@ package dev.josemariamerchan.controlweb.monitoring.checker;
 
 import java.time.Instant;
 
+import dev.josemariamerchan.controlweb.common.text.MessageSanitizer;
+
 /**
  * Outcome of one check of a site, before it is stored.
  *

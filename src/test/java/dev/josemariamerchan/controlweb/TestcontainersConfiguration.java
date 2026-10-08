@@ -29,4 +29,10 @@ public class TestcontainersConfiguration {
 		return POSTGRES;
 	}
 
+	/** Present in every test context that imports this configuration, so no test needs a different context to see events. */
+	@Bean
+	IncidentEventRecorder incidentEventRecorder() {
+		return new IncidentEventRecorder();
+	}
+
 }

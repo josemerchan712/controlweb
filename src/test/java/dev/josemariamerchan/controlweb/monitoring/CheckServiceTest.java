@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -30,6 +31,7 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 
+import dev.josemariamerchan.controlweb.incident.service.IncidentService;
 import dev.josemariamerchan.controlweb.monitoring.checker.CheckResult;
 import dev.josemariamerchan.controlweb.monitoring.checker.HttpSiteChecker;
 import dev.josemariamerchan.controlweb.monitoring.domain.Check;
@@ -58,6 +60,9 @@ class CheckServiceTest {
 	private HttpSiteChecker checker;
 
 	@Mock
+	private IncidentService incidentService;
+
+	@Mock
 	private PlatformTransactionManager transactionManager;
 
 	private final List<String> events = new ArrayList<>();
@@ -78,8 +83,13 @@ class CheckServiceTest {
 			return null;
 		}).when(transactionManager).commit(any(TransactionStatus.class));
 		lenient().when(checks.saveAndFlush(any(Check.class))).thenAnswer(invocation -> invocation.getArgument(0));
+		lenient().doAnswer(invocation -> {
+			events.add("evaluate");
+			return null;
+		}).when(incidentService).evaluate(any());
 
-		service = new CheckService(sites, checks, checker, transactionManager, Clock.fixed(NOW, ZoneOffset.UTC));
+		service = new CheckService(sites, checks, checker, incidentService, transactionManager,
+				Clock.fixed(NOW, ZoneOffset.UTC));
 		site = new Site("Blog", URL, 60, EARLIER);
 		lenient().when(sites.findById(1L)).thenReturn(Optional.of(site));
 	}
@@ -150,13 +160,13 @@ class CheckServiceTest {
 	// ---- transactions ----
 
 	@Test
-	@DisplayName("no transaction is open during the network call: read tx, commit, network, write tx, commit")
+	@DisplayName("no transaction is open during the network call; the rules are evaluated only after the check is committed")
 	void noTransactionDuringNetworkCall() {
 		checkerReturns(CheckResult.succeeded(200, 10, null));
 
 		service.runCheck(1L);
 
-		assertThat(events).containsExactly("begin", "commit", "network", "begin", "commit");
+		assertThat(events).containsExactly("begin", "commit", "network", "begin", "commit", "evaluate");
 		assertThat(definitions.get(0).isReadOnly()).as("the first transaction only reads").isTrue();
 		assertThat(definitions.get(1).isReadOnly()).as("the second one writes").isFalse();
 	}
@@ -213,5 +223,43 @@ class CheckServiceTest {
 		when(sites.findDueSiteIds(NOW)).thenReturn(List.of(3L, 1L));
 
 		assertThat(service.findDueSiteIds()).containsExactly(3L, 1L);
+	}
+
+	// ---- rule evaluation ----
+
+	@Test
+	@DisplayName("the rules of the site are evaluated once the check has been stored")
+	void rulesAreEvaluatedAfterStoring() {
+		checkerReturns(CheckResult.failed("Connection failed: refused or unreachable"));
+
+		service.runCheck(1L);
+
+		verify(checks).saveAndFlush(any(Check.class));
+		verify(incidentService).evaluate(1L);
+	}
+
+	@Test
+	@DisplayName("a failure of the rule engine never loses the check nor fails the caller")
+	void ruleEngineFailureDoesNotLoseTheCheck() {
+		checkerReturns(CheckResult.succeeded(200, 10, null));
+		doThrow(new IllegalStateException("engine exploded at https://example.com/x?token=SECRET123")).when(incidentService)
+				.evaluate(1L);
+
+		CheckResponse response = service.runCheck(1L);
+
+		verify(checks).saveAndFlush(any(Check.class));
+		assertThat(site.getLastCheckedAt()).isEqualTo(NOW);
+		assertThat(response.up()).isTrue();
+	}
+
+	@Test
+	@DisplayName("nothing is evaluated if the check could not be stored (site gone)")
+	void noEvaluationWhenNothingWasStored() {
+		when(sites.findById(1L)).thenReturn(Optional.of(site), Optional.empty());
+		checkerReturns(CheckResult.succeeded(200, 10, null));
+
+		assertThatThrownBy(() -> service.runCheck(1L)).isInstanceOf(SiteNotFoundException.class);
+
+		verifyNoInteractions(incidentService);
 	}
 }

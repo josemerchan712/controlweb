@@ -1,4 +1,4 @@
-package dev.josemariamerchan.controlweb.monitoring.checker;
+package dev.josemariamerchan.controlweb.common.text;
 
 import java.util.regex.Pattern;
 

@@ -13,6 +13,8 @@ import dev.josemariamerchan.controlweb.common.net.HostSafetyValidator;
 import dev.josemariamerchan.controlweb.config.AlertDefaultsProperties;
 import dev.josemariamerchan.controlweb.incident.domain.AlertRule;
 import dev.josemariamerchan.controlweb.incident.domain.IncidentType;
+import dev.josemariamerchan.controlweb.incident.rules.RuleEngine;
+import dev.josemariamerchan.controlweb.incident.service.IncidentService;
 import dev.josemariamerchan.controlweb.incident.repository.AlertRuleRepository;
 import dev.josemariamerchan.controlweb.site.domain.Site;
 import dev.josemariamerchan.controlweb.site.dto.SiteRequest;
@@ -27,14 +29,16 @@ public class SiteService {
 	private final AlertRuleRepository alertRules;
 	private final HostSafetyValidator hostSafety;
 	private final AlertDefaultsProperties alertDefaults;
+	private final IncidentService incidentService;
 	private final Clock clock;
 
 	public SiteService(SiteRepository sites, AlertRuleRepository alertRules, HostSafetyValidator hostSafety,
-			AlertDefaultsProperties alertDefaults, Clock clock) {
+			AlertDefaultsProperties alertDefaults, IncidentService incidentService, Clock clock) {
 		this.sites = sites;
 		this.alertRules = alertRules;
 		this.hostSafety = hostSafety;
 		this.alertDefaults = alertDefaults;
+		this.incidentService = incidentService;
 		this.clock = clock;
 	}
 
@@ -74,10 +78,15 @@ public class SiteService {
 		if (sites.existsByUrlAndIdNot(url.toString(), id)) {
 			throw new DuplicateSiteException(url.toString());
 		}
+		boolean wasActive = site.isActive();
 		site.update(request.name().strip(), url.toString(), request.checkIntervalSeconds(),
-				request.active() == null ? site.isActive() : request.active(),
+				request.active() == null ? wasActive : request.active(),
 				request.publicVisible() == null ? site.isPublicVisible() : request.publicVisible(),
 				clock.instant());
+		if (wasActive && !site.isActive()) {
+			// Close its incidents now, in this same transaction, not at the next check.
+			incidentService.closeOpenIncidents(id, RuleEngine.SITE_DEACTIVATED);
+		}
 		return SiteResponse.from(site);
 	}
 

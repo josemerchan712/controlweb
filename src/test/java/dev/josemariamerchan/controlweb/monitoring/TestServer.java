@@ -24,15 +24,15 @@ import com.sun.net.httpserver.HttpsServer;
  * A tiny HTTP or HTTPS server (JDK built-in, no extra dependency) that records every request, used
  * as the "website" under test. Listens on the loopback address; use {@link #url(String)} to reach it.
  */
-final class TestServer implements AutoCloseable {
+public final class TestServer implements AutoCloseable {
 
-	record RecordedRequest(String method, String path, String rawQuery, Map<String, List<String>> headers) {
+	public record RecordedRequest(String method, String path, String rawQuery, Map<String, List<String>> headers) {
 
-		boolean hasHeader(String name) {
+		public boolean hasHeader(String name) {
 			return headers.containsKey(name);
 		}
 
-		String header(String name) {
+		public String header(String name) {
 			List<String> values = headers.get(name);
 			return values == null || values.isEmpty() ? null : values.get(0);
 		}
@@ -49,12 +49,12 @@ final class TestServer implements AutoCloseable {
 		server.setExecutor(executor);
 	}
 
-	static TestServer http() throws IOException {
+	public static TestServer http() throws IOException {
 		HttpServer server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
 		return new TestServer(server, "http").started();
 	}
 
-	static TestServer https(SSLContext sslContext) throws IOException {
+	public static TestServer https(SSLContext sslContext) throws IOException {
 		HttpsServer server = HttpsServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
 		server.setHttpsConfigurator(new HttpsConfigurator(sslContext));
 		return new TestServer(server, "https").started();
@@ -65,20 +65,20 @@ final class TestServer implements AutoCloseable {
 		return this;
 	}
 
-	int port() {
+	public int port() {
 		return server.getAddress().getPort();
 	}
 
 	/** Always uses the host name {@code localhost}, which is what the test certificates are issued for. */
-	String url(String path) {
+	public String url(String path) {
 		return scheme + "://localhost:" + port() + path;
 	}
 
-	List<RecordedRequest> requests() {
+	public List<RecordedRequest> requests() {
 		return new ArrayList<>(requests);
 	}
 
-	void on(String path, HttpHandler handler) {
+	public void on(String path, HttpHandler handler) {
 		server.createContext(path, exchange -> {
 			Map<String, List<String>> headers = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
 			exchange.getRequestHeaders().forEach((name, values) -> headers.put(name, List.copyOf(values)));
@@ -93,11 +93,11 @@ final class TestServer implements AutoCloseable {
 		});
 	}
 
-	void respond(String path, int status) {
+	public void respond(String path, int status) {
 		on(path, exchange -> exchange.sendResponseHeaders(status, -1));
 	}
 
-	void redirect(String path, int status, String location) {
+	public void redirect(String path, int status, String location) {
 		on(path, exchange -> {
 			exchange.getResponseHeaders().add("Location", location);
 			exchange.sendResponseHeaders(status, -1);
@@ -105,7 +105,7 @@ final class TestServer implements AutoCloseable {
 	}
 
 	/** Declares an unbounded chunked body and writes it until the client goes away. */
-	static void streamForever(HttpExchange exchange, java.util.concurrent.atomic.AtomicLong bytesWritten,
+	public static void streamForever(HttpExchange exchange, java.util.concurrent.atomic.AtomicLong bytesWritten,
 			java.util.concurrent.atomic.AtomicBoolean clientGone) throws IOException {
 		exchange.sendResponseHeaders(200, 0);
 		byte[] chunk = new byte[64 * 1024];

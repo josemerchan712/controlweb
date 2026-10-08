@@ -16,7 +16,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import dev.josemariamerchan.controlweb.config.SchedulerProperties;
-import dev.josemariamerchan.controlweb.monitoring.checker.MessageSanitizer;
+import dev.josemariamerchan.controlweb.common.text.MessageSanitizer;
 import dev.josemariamerchan.controlweb.monitoring.dto.CheckResponse;
 import dev.josemariamerchan.controlweb.site.service.SiteNotFoundException;
 import jakarta.annotation.PreDestroy;

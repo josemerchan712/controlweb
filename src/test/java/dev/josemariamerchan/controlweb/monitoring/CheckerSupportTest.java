@@ -30,7 +30,7 @@ import dev.josemariamerchan.controlweb.config.CheckerProperties;
 import dev.josemariamerchan.controlweb.monitoring.checker.CertificateInspector;
 import dev.josemariamerchan.controlweb.monitoring.checker.CheckResult;
 import dev.josemariamerchan.controlweb.monitoring.checker.HttpClientConfig;
-import dev.josemariamerchan.controlweb.monitoring.checker.MessageSanitizer;
+import dev.josemariamerchan.controlweb.common.text.MessageSanitizer;
 
 /** Small pieces of the checker: message sanitizing, certificate inspection, HTTP client and properties. */
 class CheckerSupportTest {

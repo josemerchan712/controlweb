@@ -35,6 +35,7 @@ import dev.josemariamerchan.controlweb.config.AlertDefaultsProperties;
 import dev.josemariamerchan.controlweb.incident.domain.AlertRule;
 import dev.josemariamerchan.controlweb.incident.domain.IncidentType;
 import dev.josemariamerchan.controlweb.incident.repository.AlertRuleRepository;
+import dev.josemariamerchan.controlweb.incident.service.IncidentService;
 import dev.josemariamerchan.controlweb.site.domain.Site;
 import dev.josemariamerchan.controlweb.site.dto.SiteRequest;
 import dev.josemariamerchan.controlweb.site.dto.SiteResponse;
@@ -59,6 +60,9 @@ class SiteServiceTest {
 	@Mock
 	private HostSafetyValidator hostSafety;
 
+	@Mock
+	private IncidentService incidentService;
+
 	@Captor
 	private ArgumentCaptor<Site> siteCaptor;
 
@@ -70,7 +74,7 @@ class SiteServiceTest {
 	@BeforeEach
 	void setUp() {
 		service = new SiteService(sites, alertRules, hostSafety, new AlertDefaultsProperties(2, 2000, 14),
-				Clock.fixed(NOW, ZoneOffset.UTC));
+				incidentService, Clock.fixed(NOW, ZoneOffset.UTC));
 	}
 
 	// ---- create ----
@@ -288,5 +292,34 @@ class SiteServiceTest {
 		assertThatThrownBy(() -> service.delete(99L)).isInstanceOf(SiteNotFoundException.class);
 
 		verify(sites, never()).deleteById(anyLong());
+	}
+
+	// ---- deactivation closes incidents ----
+
+	@Test
+	@DisplayName("deactivating an active site closes its open incidents right away, as 'Site deactivated'")
+	void deactivationClosesIncidents() {
+		Site existing = new Site("Blog", "https://blog.example.com", 60, EARLIER);
+		when(sites.findById(1L)).thenReturn(Optional.of(existing));
+
+		service.update(1L, new SiteRequest("Blog", "https://blog.example.com", 60, false, null));
+
+		verify(incidentService).closeOpenIncidents(1L, "Site deactivated");
+	}
+
+	@Test
+	@DisplayName("updates that keep the site active, leave it inactive, or reactivate it do not close incidents")
+	void otherUpdatesDoNotCloseIncidents() {
+		Site active = new Site("Blog", "https://blog.example.com", 60, EARLIER);
+		Site inactive = new Site("Shop", "https://shop.example.com", 60, false, false, EARLIER);
+		when(sites.findById(1L)).thenReturn(Optional.of(active));
+		when(sites.findById(2L)).thenReturn(Optional.of(inactive));
+
+		service.update(1L, new SiteRequest("Blog", "https://blog.example.com", 120, true, null));
+		service.update(1L, new SiteRequest("Blog", "https://blog.example.com", 120, null, null));
+		service.update(2L, new SiteRequest("Shop", "https://shop.example.com", 60, false, null));
+		service.update(2L, new SiteRequest("Shop", "https://shop.example.com", 60, true, null));
+
+		verifyNoInteractions(incidentService);
 	}
 }
