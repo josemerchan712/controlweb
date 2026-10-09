@@ -43,7 +43,8 @@ class CiWorkflowTest {
 
 		assertThat(workflow).contains("run: ./mvnw --batch-mode --no-transfer-progress verify\n");
 		assertThat(workflow).doesNotContain("-Dtest").doesNotContain("-DskipTests").doesNotContain("-Dmaven.test.skip").doesNotContain("excludedGroups")
-				.doesNotContain("-P fast").doesNotContain("-Pfast");
+				.doesNotContain("-P fast").doesNotContain("-Pfast").doesNotContain("test.excluded.groups")
+				.doesNotContainPattern("(?m)^\\s*run:.*mvnw.*\\s-P");
 		assertThat(workflow).contains("Check that the script tests really ran here (none skipped)")
 				.contains("for test in InstallScriptTest BackupScriptsTest DeployScriptTest VerifyScriptsTest; do")
 				.contains("tests=\"[1-9][0-9]*\" errors=\"0\" skipped=\"0\" failures=\"0\"");

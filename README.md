@@ -263,6 +263,10 @@ Todos los errores son `application/problem+json` (RFC 9457) y no incluyen trazas
 .\mvnw.cmd verify
 ```
 
+Para iterar en un portátil con Windows, `.\mvnw.cmd verify -Pfast` salta las tres clases etiquetadas `slow-scripts` (los tests que
+ejecutan los scripts de bash reales: unos 8 de los 13 minutos de un `verify` completo). El perfil **no está activo por defecto**: el
+`verify` normal y el CI ejecutan siempre todo, y antes de cada commit se usa el `verify` completo.
+
 Hace falta Docker en marcha: los tests de integración arrancan un único PostgreSQL 16 con Testcontainers, compartido por
 todos. Los tests son herméticos: usan credenciales aleatorias por ejecución, ignoran tu `.env` y nunca envían nada a
 Telegram. En GitHub, el workflow de [CI](.github/workflows/ci.yml) ejecuta `./mvnw verify` en cada push y pull request

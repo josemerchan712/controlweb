@@ -21,6 +21,7 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -34,6 +35,7 @@ import org.junit.jupiter.params.provider.ValueSource;
  * never rotates out the previous copies; the weekly restore test always removes its temporary database; a restore never starts
  * without --yes, without a working identity, or from an identity left on a disk.
  */
+@Tag("slow-scripts")
 class BackupScriptsTest {
 
 	private static final String BASH = bashExecutable();

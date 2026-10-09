@@ -17,6 +17,7 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -26,6 +27,7 @@ import org.junit.jupiter.api.io.TempDir;
  * decisions: first deploy without backup, backup before every later one, automatic rollback when there are no new
  * migrations, NO automatic rollback when there are, and a refusal before anything changes when something is wrong.
  */
+@Tag("slow-scripts")
 class DeployScriptTest {
 
 	private static final String BASH = bashExecutable();

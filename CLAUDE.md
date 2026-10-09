@@ -33,6 +33,7 @@ docker compose up -d               # PostgreSQL de desarrollo
 .\mvnw.cmd spring-boot:run         # arrancar la app
 .\mvnw.cmd test                    # tests
 .\mvnw.cmd verify                  # tests + empaquetado (se ejecuta antes de cada commit)
+.\mvnw.cmd verify -Pfast          # solo para iterar: salta las clases @Tag("slow-scripts"); NUNCA antes de un commit
 docker compose down                # parar la base de datos
 ```
 
@@ -351,6 +352,12 @@ se acepta, se borra el parcial y **no se rota nada** (rotación: 14 días, siemp
 `restore-test.sh` prueba un volcado NUEVO en `controlweb_restore_test` (siempre se borra), y el fichero guardado se verifica en el PC (C7b-3).
 `restore.sh` exige `--yes`, una identidad en RAM (`/dev/shm`), comprueba antes de tocar nada, hace copia previa, para la app y restaura en una
 transacción. Pruebas: `BackupScriptsTest`, `InstallScriptTest`. Detalle y comandos en `docs/DESPLIEGUE.md`.
+
+## Tests lentos (`slow-scripts`)
+`BackupScriptsTest`, `DeployScriptTest` y `VerifyScriptsTest` llevan `@Tag("slow-scripts")` (unos 8 min de los 13 de un `verify` en Windows).
+`-Pfast` (perfil de `pom.xml`, **sin activación por defecto**) los excluye vía `test.excluded.groups`. Regla: `-Pfast` solo para iterar;
+**antes de cada commit se ejecuta `verify` completo**, y el CI lo ejecuta siempre sin perfiles ni filtros (`CiWorkflowTest` prohíbe `-Pfast`,
+`-Dtest`, `-DskipTests` y `-Dtest.excluded.groups` en el workflow; `FastProfileGuardianTest` vigila el perfil y las etiquetas).
 
 ## Units de systemd y regla de sudoers (fase 2, paso C7b-2)
 `deploy/backup/systemd/` (cuatro units: copia diaria 04:15 UTC, prueba de restauración los domingos 05:00 UTC, ambas `Persistent`, con
