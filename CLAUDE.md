@@ -342,6 +342,16 @@ infraestructura** (esquema de redes y subredes, rutas del servidor, nombres de d
 aparece (se escribe `<IP_PUBLICA_VPS>`), pero el resto sí. Requisito anotado para C5: el perfil `prod` no debe arrancar con
 `app.proxy.trusted-addresses` vacío.
 
+## Copias de seguridad (fase 2, paso C7b-1)
+`deploy/backup/` (`backup.sh`, `restore.sh`, `restore-test.sh`, `common.sh`, `install.sh`): `pg_dump | age` con clave **pública** en el servidor
+(`/etc/controlweb/backup-recipient.txt`) y privada solo en el PC del dueño; sin copia en claro en el disco. Se instalan como **root:root** en
+`/usr/local/lib/controlweb/` con `sudo deploy/backup/install.sh` (que comprueba permisos): jamás se ejecutan desde el clon, que jose puede editar.
+Una copia solo vale si toda la tubería salió bien, `pg_restore --list` la acepta con todas las tablas y tiene cabecera de age y tamaño; si no, no
+se acepta, se borra el parcial y **no se rota nada** (rotación: 14 días, siempre las 3 más recientes). El servidor no puede descifrar sus copias:
+`restore-test.sh` prueba un volcado NUEVO en `controlweb_restore_test` (siempre se borra), y el fichero guardado se verifica en el PC (C7b-3).
+`restore.sh` exige `--yes`, una identidad en RAM (`/dev/shm`), comprueba antes de tocar nada, hace copia previa, para la app y restaura en una
+transacción. Pruebas: `BackupScriptsTest`, `InstallScriptTest`. Detalle y comandos en `docs/DESPLIEGUE.md`.
+
 ## Publicar y volver atrás (fase 2, paso C7a)
 `deploy/release.ps1` (PC, PowerShell 5.1: construye desde un worktree limpio de un commit subido, guarda la imagen en un fichero —nunca por
 una tubería—, la sube con su SHA-256 y lanza el despliegue) y `deploy/deploy.sh` (servidor, sin root: comprobaciones antes de cambiar nada,

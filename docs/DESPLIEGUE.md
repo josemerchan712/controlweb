@@ -524,6 +524,108 @@ variable que falta, tar corrupto, commit desconocido, vuelta atrás manual y `--
 sintácticamente correcto, que un `-DryRun` lista todos los pasos y no crea nada, y reglas como «ningún dato binario por una tubería».
 En Windows estas pruebas tardan unos 2 minutos (cada llamada a `docker` lanza un `bash`); en Linux, segundos.
 
+**Implementación de C7b-1 (scripts de copia y restauración con `age`):**
+
+*Diseño.* Las copias se cifran con **age** con una clave **asimétrica**: en el servidor solo está la clave **pública**
+(`/etc/controlweb/backup-recipient.txt`); la **privada vive solo en tu PC**. El servidor puede escribir copias pero **no leerlas**: quien se
+lleve el disco, o un servidor comprometido, no obtiene la base de datos. `pg_dump` se ejecuta dentro del contenedor de la base de datos
+y su salida pasa por `age` al salir (`pg_dump | age`): **nunca se escribe una copia en claro en el disco del servidor**.
+
+Los scripts (`deploy/backup/`) se instalan como ficheros de **root** en `/usr/local/lib/controlweb/`, nunca se ejecutan desde el clon de tu
+carpeta personal (que jose puede editar: quien pueda editar un script que root ejecuta puede ser root):
+
+| Script | Para qué |
+|---|---|
+| `backup.sh` | copia cifrada; la usan el timer de las 04:15 UTC y el despliegue (copia previa) |
+| `restore-test.sh` | prueba semanal: vuelca la base de datos real y restaura ese volcado en `controlweb_restore_test` con `pg_restore --exit-on-error`; comprueba tablas, versión de Flyway y recuentos; **la base temporal se borra siempre** (éxito, fallo, Ctrl-C, kill); su nombre es fijo y el script se niega a tocar otra |
+| `restore.sh` | restaura una copia sobre la base de datos real (destructivo, con `--yes`, copia de seguridad previa, aplicación parada, todo o nada) |
+| `common.sh`, `install.sh` | funciones comunes; instalador que comprueba los permisos |
+
+*Qué hace falta para que una copia «cuente»* (`backup.sh`): que **todas** las etapas de `pg_dump | tee | age` terminen bien; que `pg_restore --list`
+(con la misma corriente de bytes, dentro del contenedor) acepte el archivo y su índice contenga `sites`, `checks`, `incidents`, `alert_rules`,
+`users` y `flyway_schema_history`; que el fichero empiece por la cabecera de age y tenga un tamaño razonable. Solo entonces se renombra a su
+nombre definitivo (atómico) y **solo después** se rota. **Una copia que no se puede leer o que no pasa `pg_restore --list` no se da por buena, se
+borra su fichero parcial, se anota el fallo en `/var/lib/controlweb-backup/last-failure` y no se toca ninguna copia anterior** (ni siquiera las que
+ya superan la retención). Rotación: se borran las de más de 14 días, pero las **3 más recientes se conservan siempre**. Un bloqueo con el PID
+evita dos copias a la vez y se recupera solo si el proceso murió. Límites: `pg_restore --list` lee el índice, no cada bloque de datos; por eso
+existen la prueba de restauración semanal y la verificación en tu PC.
+
+*Límite importante de la clave asimétrica:* el servidor **no puede descifrar** sus propias copias, así que la prueba semanal del servidor
+restaura un volcado **nuevo**, no el fichero guardado (de ese solo comprueba que existe, es reciente, tiene cabecera de age y tamaño razonable).
+La prueba de que un fichero guardado se descifra y restaura de verdad se hace en **tu PC** (C7b-3: `download-backups.ps1 -VerifyRestore`) y a mano
+tras cualquier incidencia.
+
+*Claves de cifrado (en tu PC, PowerShell):*
+
+```powershell
+# 1. Instala age (sin ser administrador): winget install FiloSottile.age   (si no, descarga el zip de https://github.com/FiloSottile/age/releases)
+# 2. Genera el par de claves, la privada en una carpeta tuya:
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.controlweb" | Out-Null
+age-keygen -o "$env:USERPROFILE\.controlweb\backup-identity.txt"
+# 3. La clave PÚBLICA (la única que sube al servidor):
+age-keygen -y "$env:USERPROFILE\.controlweb\backup-identity.txt" | Out-File -Encoding ascii "$env:USERPROFILE\.controlweb\backup-recipient.txt"
+# 4. Solo tú puedes leer la privada:
+icacls "$env:USERPROFILE\.controlweb\backup-identity.txt" /inheritance:r /grant:r "$($env:USERNAME):(R)"
+```
+
+**Dónde guardar la clave privada** (`backup-identity.txt`, son tres líneas): (1) tu PC, en esa carpeta; (2) **una copia en tu gestor de contraseñas**
+(pega el texto completo como nota segura); (3) opcionalmente una copia **sin conexión** (un USB guardado aparte). Nunca en el servidor, nunca en
+el repositorio, nunca en el correo. **Si la pierdes (y no tienes ninguna copia) no se puede descifrar ninguna copia existente**: age no tiene
+recuperación. Lo que queda es generar un par nuevo, cambiar la clave pública del servidor (las copias nuevas ya se podrían leer) y, para los
+datos anteriores, recurrir a las copias de disco completo de Hetzner. Por eso la privada necesita dos copias independientes.
+
+*Instalación en el servidor (S6)* — la clave pública se instala una vez, y el instalador comprueba los permisos:
+
+```bash
+sudo apt install age                                            # Ubuntu 24.04 trae age 1.1.x
+scp backup-recipient.txt jose@HOST:                             # desde tu PC; es la clave PÚBLICA
+sudo install -o root -g root -m 644 backup-recipient.txt /etc/controlweb/backup-recipient.txt
+grep -c AGE-SECRET-KEY /etc/controlweb/backup-recipient.txt     # debe imprimir 0
+cd ~/controlweb && git log -1 --stat && git diff HEAD~1 -- deploy/backup | less    # revisa lo que vas a instalar como root
+sudo deploy/backup/install.sh                                   # copia con `install` (dueño root, modo fijo) y comprueba permisos
+```
+
+Cómo comprobar los permisos tú mismo (todo debe ser `root:root`, y nada escribible por grupo u otros salvo lo que se indica):
+
+```bash
+stat -c '%U:%G %a %n' /usr/local/lib/controlweb /usr/local/lib/controlweb/* /var/backups/controlweb /var/lib/controlweb-backup /etc/controlweb /etc/controlweb/backup-recipient.txt
+# esperado: root:root 755 (carpeta y cuatro scripts) · 700 /var/backups/controlweb · 755 /var/lib/controlweb-backup y /etc/controlweb · 644 backup-recipient.txt
+namei -l /usr/local/lib/controlweb/backup.sh                    # ninguna carpeta de la ruta debe pertenecer a jose ni ser escribible por otros
+sudo -u jose test -w /usr/local/lib/controlweb/backup.sh && echo "MAL: jose puede editarlo" || echo "bien: jose no puede editarlo"
+```
+
+Primera copia a mano (antes de activar los timers) y comprobación:
+
+```bash
+sudo /usr/local/lib/controlweb/backup.sh
+cat /var/lib/controlweb-backup/last                             # fecha, nombre y tamaño
+sudo ls -l /var/backups/controlweb                              # un .dump.age, modo 600, dueño root
+```
+
+*Restaurar (incidencia).* La clave privada se copia al servidor **a la RAM** solo mientras dura la restauración y se destruye después:
+
+```bash
+# desde tu PC:  scp "$env:USERPROFILE\.controlweb\backup-identity.txt" jose@HOST:/dev/shm/controlweb-identity.txt
+sudo /usr/local/lib/controlweb/restore.sh --identity /dev/shm/controlweb-identity.txt /var/backups/controlweb/controlweb-FECHA.dump.age        # sin --yes: solo explica
+sudo /usr/local/lib/controlweb/restore.sh --identity /dev/shm/controlweb-identity.txt --yes /var/backups/controlweb/controlweb-FECHA.dump.age
+shred -u /dev/shm/controlweb-identity.txt
+```
+
+`restore.sh` se niega a usar una identidad que esté en un disco (solo `tmpfs`/`ramfs`) salvo `--allow-disk-identity`. Antes de cambiar nada
+comprueba que la identidad descifra la copia y que el archivo tiene todas las tablas; toma una copia de seguridad de la base de datos actual
+(salvo `--no-safety-backup`); para la aplicación; restaura con `--clean --if-exists --exit-on-error --single-transaction` (si falla, la base de
+datos queda como estaba); y **no arranca la aplicación**: despliega después la versión que corresponda a esos datos
+(`deploy.sh rollback --force` o un despliegue nuevo).
+
+*Pruebas:* `BackupScriptsTest` (31 casos) ejecuta los tres scripts reales contra un `docker` y un `age` falsos: la copia contiene el volcado
+completo byte a byte (aunque `pg_restore --list` deje de leer pronto), permisos 0600/0700, rotación (14 días, mínimo 3), **ocho formas de
+copia mala** (`pg_restore --list` la rechaza, falta una tabla, `pg_restore --list` termina con error tras un índice completo, `pg_dump` falla, `age`
+falla, no escribe nada, escribe basura sin cabecera, escribe solo la cabecera) en las que no se acepta nada y **no se rota ninguna copia anterior**, claves incorrectas (falta, privada en el servidor, dos),
+no ser root, base de datos parada, disco lleno, bloqueo vivo y bloqueo viejo, restos de una ejecución caída, el test de restauración con
+limpieza garantizada en cuatro tipos de fallo, y `restore.sh` con y sin `--yes`, identidad errónea o en disco, fallo a mitad y `--target-db`.
+`InstallScriptTest` (solo Linux; la lógica también se ejecutó a mano en WSL) comprueba modos, repetición segura, el script que se vuelve
+escribible por el grupo, la clave privada en el fichero de la clave pública y las carpetas superiores.
+
 ## 13. Pasos
 
 ### Fase A: solo este repo
@@ -539,7 +641,9 @@ En Windows estas pruebas tardan unos 2 minutos (cada llamada a `docker` lanza un
 | **C5 [CW]** ✅ | `application-prod.yml`, protecciones del perfil `prod`, Flyway `*:future`, cron de retención | Hecho: ver «Implementación de C5» | revert |
 | **C6 [CW]** ✅ | Dockerfile, `compose.prod.yml`, job de CI de la imagen | Hecho; medido en el portátil (ver «Medición de memoria») | revert |
 | **C7a [CW]** ✅ | `release.ps1` y `deploy.sh` con vuelta atrás | Hecho: ver «Implementación de C7a» | revert |
-| **C7b [CW]** | Copias de seguridad y restauración (`backup.sh`, `restore.sh`, `restore-test.sh`, units de systemd, `age`) | tests con base de datos temporal | revert |
+| **C7b-1 [CW]** ✅ | Scripts de copia cifrada con `age`, restauración, prueba de restauración e instalador | Hecho: ver «Implementación de C7b-1» | revert |
+| **C7b-2 [CW]** | Units de systemd (copia 04:15 UTC, prueba semanal), regla de `sudoers` validada con `visudo -c` | tests estáticos | revert |
+| **C7b-3 [CW]** | Descarga a tu PC (`download-backups.ps1`), clave SSH restringida, tarea programada de Windows, verificación de restauración local | tests de `download-backups.ps1` | revert |
 | **C7c [CW]** | Cortafuegos de salida (`controlweb-firewall`), `caddy-install.sh`, fragmento de Caddy y shellcheck en CI | `bash -n`, shellcheck, revisión | revert |
 
 **Requisitos de C5 (añadidos al aprobar C1):**
