@@ -342,6 +342,13 @@ infraestructura** (esquema de redes y subredes, rutas del servidor, nombres de d
 aparece (se escribe `<IP_PUBLICA_VPS>`), pero el resto sí. Requisito anotado para C5: el perfil `prod` no debe arrancar con
 `app.proxy.trusted-addresses` vacío.
 
+## Publicar y volver atrás (fase 2, paso C7a)
+`deploy/release.ps1` (PC, PowerShell 5.1: construye desde un worktree limpio de un commit subido, guarda la imagen en un fichero —nunca por
+una tubería—, la sube con su SHA-256 y lanza el despliegue) y `deploy/deploy.sh` (servidor, sin root: comprobaciones antes de cambiar nada,
+copia previa salvo en el primer despliegue, `current`/`previous`, espera a sano 240 s, vuelta atrás **automática solo si no hay migraciones
+nuevas**, `rollback [--force]`, `status`). Detalle y comandos en `docs/DESPLIEGUE.md`. `DeployScriptTest` y `ReleaseScriptTest` los prueban sin
+servidor (unos 2 min en Windows). El `.deploy/` del clon (estado) no se versiona.
+
 ## Imagen, compose y CI (fase 2, paso C6)
 `Dockerfile` (JDK para compilar, JRE para ejecutar; etiqueta exacta + digest; usuario 10001; HEALTHCHECK con `wget`; contexto en lista
 blanca en `.dockerignore`), `compose.prod.yml` (sin valores secretos: todo `${X:?mensaje}`; app y base de datos endurecidas;

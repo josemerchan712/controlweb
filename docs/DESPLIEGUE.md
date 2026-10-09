@@ -447,6 +447,59 @@ destinos. El volumen de datos se llama `controlweb_prod_pgdata` para no chocar c
 *JVM:* las opciones (`JAVA_TOOL_OPTIONS`) están en el compose con el valor **decidido tras la medición** (`-Xmx256m` en 512 MiB, ver «Medición de memoria»),
 sustituible desde `.env.prod` sin reconstruir.
 
+**Implementación de C7a (publicar y volver atrás):**
+
+*Desde tu PC* (Windows PowerShell 5.1, `deploy/release.ps1`; necesita Git, Docker Desktop y `ssh`/`scp` con clave, sin contraseña):
+
+```powershell
+# desplegar la última versión de main (antes: mira que el CI de ese commit está en verde en GitHub y haz push)
+.\deploy\release.ps1 -SshTarget jose@<host> -CiChecked
+# volver a la versión anterior / ver qué corre
+.\deploy\release.ps1 -SshTarget jose@<host> -Rollback
+.\deploy\release.ps1 -SshTarget jose@<host> -Status
+# ver los pasos sin hacer nada (no construye, no sube, no toca el servidor)
+.\deploy\release.ps1 -SshTarget jose@<host> -DryRun
+```
+
+`-SshTarget` puede ir en la variable de entorno `CONTROLWEB_SSH` (un alias de `~/.ssh/config` sirve). El script: comprueba que el árbol de trabajo
+está limpio, que estás en `main` y que `HEAD` es igual a `origin/main`; exige `-CiChecked` (no puede ver tu repositorio privado);
+construye la imagen desde un `git worktree` desechable de ese commit (nada local se cuela); la verifica con `verify-image.sh` (Git Bash);
+la guarda en un **fichero** con `docker save -o` (nunca por una tubería: en PowerShell 5.1 una tubería entre programas convierte los
+datos binarios en texto y los corrompe), calcula su SHA-256 y sube imagen y suma con `scp` a `~/controlweb-releases/`; y ejecuta
+`~/controlweb/deploy/deploy.sh <commit> <fichero>`. Código de salida distinto de 0 si cualquier paso falla.
+
+*En el servidor* (`deploy/deploy.sh`, como `jose`, sin root):
+
+| Paso | Qué hace | Si falla |
+|---|---|---|
+| 1. Comprobaciones | argumentos, SHA-256 del tar, `.env.prod`, red `controlweb_proxy`, cortafuegos de salida activo, clon sin cambios locales, commit presente en GitHub, y `compose.prod.yml` **del commit nuevo** acepta las variables de `.env.prod` | se niega **antes de cambiar nada** |
+| 2. Copia previa | `sudo systemctl start controlweb-backup.service` (bloquea hasta que termina y verifica la copia). **Se omite solo en el primer despliegue** (sin versión anterior ni base de datos) | se niega **antes de cambiar nada** |
+| 3. Cambio | `docker load`; `current` → `previous`; `<commit>` → `current`; el clon pasa al commit; estado en `~/controlweb/.deploy/` | — |
+| 4. Arranque | `docker compose up -d` y espera a sano (`HEALTH_TIMEOUT`, 240 s; la de Rotten Odds es de 180 s) | ver abajo |
+
+Si la versión nueva **no** llega a estar sana: **sin migraciones nuevas** se vuelve sola a la anterior (imagen `previous`, código del commit
+anterior) y el despliegue termina con error; **con migraciones nuevas** (hay diferencias en `src/main/resources/db/migration` entre las dos
+versiones) **no** se vuelve sola: Flyway solo va hacia delante. Se **para la aplicación** (la base de datos sigue) y el mensaje indica
+restaurar la copia previa (`restore.sh`, C7b) o, si las migraciones solo añaden cosas, probar `deploy.sh rollback --force`. Si es el
+primer despliegue y falla, se para la aplicación (no hay a qué volver).
+
+`deploy.sh rollback` (a mano) se niega a cruzar un cambio de migraciones salvo `--force`, y `deploy.sh status` dice qué corre y a qué se
+volvería. Los ficheros subidos se borran tras un despliegue correcto y solo se conservan las imágenes de la versión actual y la anterior.
+
+Detalles que importan: la ruta de la imagen puede ser relativa (`release.ps1` la pasa así por `ssh`); el script entero se lee **antes** de
+ejecutarse (`main "$@"; exit $?`) porque `git checkout` sustituye el propio `deploy.sh`; la copia previa se pide aunque no haya estado
+guardado si el contenedor de la base de datos ya existe.
+
+*Orden de instalación:* la copia previa necesita el servicio `controlweb-backup.service` y una regla de `sudo` (C7b). Hasta que exista,
+solo funciona el **primer** despliegue (S5), que no hace copia; S6 (copias) va **antes** del segundo despliegue.
+
+*Pruebas:* `DeployScriptTest` ejecuta `deploy.sh` de verdad (bash y git reales) contra un `docker`, `systemctl` y `sudo` falsos, con un
+repositorio real de tres commits (el tercero añade una migración) y uno bare como «GitHub»: primer y segundo despliegue, la copia antes de
+cargar la imagen, vuelta atrás automática, **no** automática con migraciones, rechazo por cambios locales, cortafuegos inactivo, copia fallida,
+variable que falta, tar corrupto, commit desconocido, vuelta atrás manual y `--force`. `ReleaseScriptTest` comprueba que `release.ps1` es
+sintácticamente correcto, que un `-DryRun` lista todos los pasos y no crea nada, y reglas como «ningún dato binario por una tubería».
+En Windows estas pruebas tardan unos 2 minutos (cada llamada a `docker` lanza un `bash`); en Linux, segundos.
+
 ## 13. Pasos
 
 ### Fase A: solo este repo
@@ -461,7 +514,9 @@ sustituible desde `.env.prod` sin reconstruir.
 | **C4 [CW]** *(omitido por ahora; ver S0)* | Mensaje "desafío de Cloudflare" | Tests | revert |
 | **C5 [CW]** ✅ | `application-prod.yml`, protecciones del perfil `prod`, Flyway `*:future`, cron de retención | Hecho: ver «Implementación de C5» | revert |
 | **C6 [CW]** ✅ | Dockerfile, `compose.prod.yml`, job de CI de la imagen | Hecho; medido en el portátil (ver «Medición de memoria») | revert |
-| **C7 [CW]** | `deploy/` completo + shellcheck en CI | `bash -n`, shellcheck, revisión | revert |
+| **C7a [CW]** ✅ | `release.ps1` y `deploy.sh` con vuelta atrás | Hecho: ver «Implementación de C7a» | revert |
+| **C7b [CW]** | Copias de seguridad y restauración (`backup.sh`, `restore.sh`, `restore-test.sh`, units de systemd, `age`) | tests con base de datos temporal | revert |
+| **C7c [CW]** | Cortafuegos de salida (`controlweb-firewall`), `caddy-install.sh`, fragmento de Caddy y shellcheck en CI | `bash -n`, shellcheck, revisión | revert |
 
 **Requisitos de C5 (añadidos al aprobar C1):**
 - El perfil `prod` **debe negarse a arrancar si `app.proxy.trusted-addresses` está vacío**, con test. Sin esa IP todos los
