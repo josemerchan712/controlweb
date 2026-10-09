@@ -1,0 +1,9 @@
+# /etc/sudoers.d/controlweb-reader -- installed by deploy/backup/install-reader.sh (root:root, mode 0440) ONLY after `visudo -cf` accepted it.
+#
+# The account cwbackup (no password, used only through ONE restricted SSH key) may run ONE read-only script as root, with no arguments.
+# The request travels on standard input and is validated by the script itself. Why this does not allow privilege escalation:
+# docs/DESPLIEGUE.md ("La clave SSH restringida de las copias").
+# No pseudo-terminal for this account: with use_pty, sudo would run the script on a pty and could turn the binary backup into text
+# (line-ending translation). There is no terminal in this flow (the key is "restrict"), so nothing is lost.
+Defaults:cwbackup !use_pty
+cwbackup ALL=(root) NOPASSWD: /usr/local/lib/controlweb/serve-backup.sh

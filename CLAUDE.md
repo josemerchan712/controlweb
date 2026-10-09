@@ -354,7 +354,7 @@ se acepta, se borra el parcial y **no se rota nada** (rotación: 14 días, siemp
 transacción. Pruebas: `BackupScriptsTest`, `InstallScriptTest`. Detalle y comandos en `docs/DESPLIEGUE.md`.
 
 ## Tests lentos (`slow-scripts`)
-`BackupScriptsTest`, `DeployScriptTest` y `VerifyScriptsTest` llevan `@Tag("slow-scripts")` (unos 8 min de los 13 de un `verify` en Windows).
+`BackupScriptsTest`, `DeployScriptTest`, `VerifyScriptsTest` y `DownloadBackupsScriptTest` llevan `@Tag("slow-scripts")` (unos 8 min de los 13 de un `verify` en Windows).
 `-Pfast` (perfil de `pom.xml`, **sin activación por defecto**) los excluye vía `test.excluded.groups`. Regla: `-Pfast` solo para iterar;
 **antes de cada commit se ejecuta `verify` completo**, y el CI lo ejecuta siempre sin perfiles ni filtros (`CiWorkflowTest` prohíbe `-Pfast`,
 `-Dtest`, `-DskipTests` y `-Dtest.excluded.groups` en el workflow; `FastProfileGuardianTest` vigila el perfil y las etiquetas).
@@ -367,6 +367,16 @@ controlweb-backup.service`, sin comodines ni etiquetas). `install.sh` las instal
 `daemon-reload`; **no activa los timers**. Por qué no permite escalar (dueño/modo de unit y script, entorno limpio de systemd, comando exacto) y
 qué debe mostrar `sudo -l`: `docs/DESPLIEGUE.md`. Pruebas: `SystemdUnitsGuardianTest`, `InstallScriptTest` (CI Linux). Si cambias la regla,
 cambia también `deploy.sh` y el guardián. `restore.sh` destruye SIEMPRE la identidad age (trap EXIT con `shred`, también tras Ctrl-C/kill).
+
+## Descarga de copias a tu PC (fase 2, paso C7b-3)
+Servidor: `serve-backup.sh` (solo lectura; petición de UNA línea por stdin: `list` | `sha256 NOMBRE` | `get NOMBRE`, el nombre debe ser exactamente
+`controlweb-AAAAMMDDTHHMMSSZ.dump.age`), regla `controlweb-reader.sudoers` (`Defaults:cwbackup !use_pty` + el comando exacto sin argumentos) e
+`install-reader.sh --pubkey FILE [--from IP]` (cuenta `cwbackup` sin contraseña, `authorized_keys` root:root con
+`restrict,command="sudo -n …/serve-backup.sh"`; rechaza claves privadas, con opciones o que no sean ed25519). PC: `download-backups.ps1` (PowerShell 5.1:
+ssh se ejecuta con `cmd /c "ssh … < petición > copia.partial"`, nunca tuberías ni `>` de PowerShell con binarios; tamaño + SHA-256 + cabecera age antes de renombrar;
+salida 1 = fallo, 3 = copia del servidor obsoleta; `-Status`, `-InstallTask`, `-VerifyRestore` que descifra con age y restaura en un PostgreSQL desechable de Docker).
+Ganchos de test: `CONTROLWEB_SSH_EXE`, `CONTROLWEB_AGE_EXE`, `CONTROLWEB_DOCKER_EXE`. Guía completa (claves age y SSH, qué copias de la privada guardar,
+tarea programada, comandos exactos): `docs/DESPLIEGUE.md`.
 
 ## Publicar y volver atrás (fase 2, paso C7a)
 `deploy/release.ps1` (PC, PowerShell 5.1: construye desde un worktree limpio de un commit subido, guarda la imagen en un fichero —nunca por

@@ -659,7 +659,7 @@ limpieza garantizada en cuatro tipos de fallo, y `restore.sh` con y sin `--yes`,
 siempre** (ocho resultados distintos, solo por estar en RAM, nunca un fichero de disco sin pedirlo, y Ctrl-C a mitad de la restauración).
 `InstallScriptTest` (solo Linux) se **ejecuta en el CI** (`ubuntu-latest`, job `verify`): `./mvnw verify` corre todas las pruebas sin
 filtros y la suposición que lo omite solo salta en Windows. Para que no se pueda omitir sin que nadie se entere, el job comprueba después de las
-pruebas el informe de surefire de `InstallScriptTest`, `BackupScriptsTest`, `DeployScriptTest` y `VerifyScriptsTest`: cada uno debe tener
+pruebas el informe de surefire de `InstallScriptTest`, `InstallReaderScriptTest`, `ServeBackupScriptTest`, `BackupScriptsTest`, `DeployScriptTest` y `VerifyScriptsTest`: cada uno debe tener
 pruebas, **ninguna fallida y ninguna omitida** (paso «Check that the script tests really ran here»; `CiWorkflowTest` vigila que ese paso
 exista y que `verify` se llame sin perfiles ni filtros). En el portátil con Windows se omiten sus 10 casos; la lógica del instalador también
 se ejecutó a mano en WSL Ubuntu. Comprueba modos, repetición segura, el script que se vuelve
@@ -759,6 +759,173 @@ desde el instalador, ejecutar el script desde el clon y ampliar `ReadWritePaths`
 `visudo -cf` aceptó la regla, `systemd-analyze verify` aceptó las units (salvo la dependencia de `docker.service`, que WSL no tiene) y
 `systemd-analyze calendar` confirmó los dos horarios (`04:15:00 UTC` diario, `Sun 05:00:00 UTC`).
 
+### Implementación de C7b-3: descarga de las copias a tu PC, clave SSH restringida y comprobación de restauración
+
+Hasta aquí las copias cifradas viven **solo en el servidor** (14 días). C7b-3 las trae a tu PC (donde está la clave que las descifra) y te da la
+prueba que el servidor no puede hacer: que una copia guardada **se descifra y se restaura de verdad**.
+
+```
+tu PC  --ssh (clave restringida, cwbackup@HOST)-->  sshd ejecuta SOLO:  sudo -n /usr/local/lib/controlweb/serve-backup.sh
+ download-backups.ps1                                   (regla de sudoers: ese comando exacto, sin argumentos)
+   escribe «get controlweb-….dump.age» en un fichero, lo pasa por stdin con «cmd /c ssh … < petición > copia»
+   comprueba tamaño + SHA-256 + cabecera age, y solo entonces renombra el fichero
+```
+
+| Fichero | Dónde corre / se instala | Qué es |
+|---|---|---|
+| `deploy/backup/serve-backup.sh` | servidor, `/usr/local/lib/controlweb/` (root:root 0755) | solo lectura: `list`, `sha256 NOMBRE`, `get NOMBRE` |
+| `deploy/backup/controlweb-reader.sudoers` | servidor, `/etc/sudoers.d/controlweb-reader` (root:root 0440) | `cwbackup ALL=(root) NOPASSWD: /usr/local/lib/controlweb/serve-backup.sh` |
+| `deploy/backup/install-reader.sh` | servidor, con `sudo` | crea la cuenta `cwbackup`, instala todo lo anterior y la línea de la clave |
+| `deploy/backup/download-backups.ps1` | **tu PC** (Windows PowerShell 5.1) | descarga, comprueba, rota, estado, tarea programada y `-VerifyRestore` |
+
+#### 1. Dónde y cómo generas la clave age (en tu PC, nunca en el servidor)
+
+```powershell
+winget install FiloSottile.age                       # una vez, sin ser administrador; cierra y abre PowerShell
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.controlweb" | Out-Null
+age-keygen -o "$env:USERPROFILE\.controlweb\backup-identity.txt"      # imprime «Public key: age1…»; la privada va al fichero
+icacls "$env:USERPROFILE\.controlweb" /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F"    # solo tu usuario puede leerlo
+$public = (age-keygen -y "$env:USERPROFILE\.controlweb\backup-identity.txt")
+[System.IO.File]::WriteAllText("$env:USERPROFILE\.controlweb\backup-recipient.txt", $public + "`n", (New-Object System.Text.UTF8Encoding($false)))
+Get-Content "$env:USERPROFILE\.controlweb\backup-recipient.txt"       # una línea que empieza por age1…
+```
+
+**Nunca uses `>` con `age-keygen` en PowerShell 5.1**: escribe el fichero en UTF-16 y age no lo lee. Usa `-o`. La clave **pública** (`age1…`) es la única
+que sube al servidor (`/etc/controlweb/backup-recipient.txt`, ver «Instalación en el servidor»). La **privada**
+(`backup-identity.txt`, el fichero con `AGE-SECRET-KEY-1…`) es lo único que permite leer las copias: sin ella, todas las copias son basura.
+
+*Qué copias guardas de la privada* (la regla: **al menos dos sitios independientes**, y ninguno es el servidor ni el repositorio ni la misma nube
+donde guardes las copias descargadas):
+
+1. **El fichero en tu PC** (`~\.controlweb\backup-identity.txt`), para el día a día y `-VerifyRestore`.
+2. **Una entrada en tu gestor de contraseñas** (nota segura con las tres líneas del fichero). Es la copia que sobrevive a que se rompa el disco.
+3. **Una copia en papel o en un USB guardado fuera de casa** (imprime el fichero y guárdalo donde guardarías un documento importante). Es la que
+   sobrevive si pierdes el PC *y* el acceso al gestor.
+
+Prueba la copia de seguridad **de la clave**, no solo la de la base de datos: una vez al mes, `-VerifyRestore` con el fichero recuperado del gestor
+(no con el del PC). Si pierdes **todas** las copias de la privada no hay forma de recuperar los datos cifrados. Si sospechas que la privada se ha
+filtrado: genera un par nuevo, sustituye la pública en el servidor (las copias nuevas usan la nueva; las viejas solo se abren con la vieja, así
+que conserva también la vieja mientras te hagan falta esas copias).
+
+#### 2. La clave SSH restringida (solo para descargar)
+
+En tu PC, una clave **distinta de la que usas para entrar como jose**, sin frase de paso (la tarea programada no puede teclearla; la restricción
+del servidor es lo que la hace segura):
+
+```powershell
+ssh-keygen -t ed25519 -f "$env:USERPROFILE\.ssh\controlweb_backup_ed25519" -N '""' -C "controlweb-backup-download"   # las comillas '""' son necesarias en PowerShell 5.1
+icacls "$env:USERPROFILE\.ssh\controlweb_backup_ed25519" /inheritance:r /grant:r "${env:USERNAME}:R"                 # OpenSSH se niega a usar una privada legible por otros
+scp "$env:USERPROFILE\.ssh\controlweb_backup_ed25519.pub" jose@HOST:      # la PÚBLICA (.pub)
+```
+
+En el servidor, revisando antes lo que instalas (y **sin** que `install-reader.sh` toque la configuración de `sshd`):
+
+```bash
+sudo sshd -T | grep -iE '^(allowusers|allowgroups|pubkeyauthentication|authorizedkeysfile|permitrootlogin)'
+#   si hay «allowusers» o «allowgroups», cwbackup tiene que estar incluido: es un cambio de sshd_config que decides tú
+cd ~/controlweb && git log -1 --stat && less deploy/backup/serve-backup.sh deploy/backup/install-reader.sh
+sudo deploy/backup/install.sh                                              # la carpeta /usr/local/lib/controlweb tiene que existir
+sudo deploy/backup/install-reader.sh --pubkey ~/controlweb_backup_ed25519.pub              # opcional: --from TU.IP.PUBLICA
+cat /var/lib/cwbackup/.ssh/authorized_keys                                 # restrict,command="sudo -n /usr/local/lib/controlweb/serve-backup.sh" ssh-ed25519 AAAA… controlweb-backup-download
+sudo -l -U cwbackup                                                        # solo: (root) NOPASSWD: /usr/local/lib/controlweb/serve-backup.sh
+```
+
+*Qué hace cada pieza de la línea de `authorized_keys`:* `restrict` desactiva de golpe terminal, reenvío de puertos, agente, X11 y `~/.ssh/rc`;
+`command="…"` obliga a que, **pida lo que pida el cliente**, sshd ejecute solo ese comando (lo que escriba el cliente en la línea de órdenes se
+ignora: la petición viaja por la entrada estándar). `from="IP"` (opcional) limita la clave a tu IP. Si tu IP cambia mucho, no lo uses.
+
+*Por qué no permite escalar privilegios:*
+
+1. El fichero `authorized_keys`, su carpeta y el home de `cwbackup` (`/var/lib/cwbackup`) son **root:root**: la cuenta no puede reescribir su propia línea para quitarse la restricción. `install-reader.sh` lo comprueba (dueño, modo y que ninguna carpeta de la ruta sea escribible por otros).
+2. La cuenta no tiene contraseña (cuenta de sistema, bloqueada): solo entra con esa clave, y esa clave solo ejecuta ese comando.
+3. `serve-backup.sh` es root:root 0755 en una carpeta de root y la regla de `sudoers` es **ese comando exacto sin argumentos**: no hay comodín que abrir.
+4. La petición (una línea, máximo 200 caracteres) se valida contra una lista cerrada: `list`; `sha256 NOMBRE`; `get NOMBRE`, y `NOMBRE` debe coincidir con `controlweb-AAAAMMDDTHHMMSSZ.dump.age`. Sin rutas, sin `..`, sin comodines, sin opciones, sin enlaces simbólicos, sin segunda línea: más de 30 peticiones hostiles distintas están en `ServeBackupScriptTest` y todas dan «refused», estado 2 y salida vacía.
+5. Solo lee: el script no escribe, no borra ni cambia permisos (un test lo comprueba sobre el texto y sobre la carpeta).
+6. `install-reader.sh` rechaza antes de tocar nada: una clave privada, una clave con opciones propias (`command=`, `permitopen=`…), otro tipo de clave que no sea `ssh-ed25519`, varias claves, y un `--from` que no sea una IP o un rango.
+
+*Qué pasa si te roban la clave SSH de descarga:* solo pueden bajar texto cifrado que no pueden abrir y no pueden cambiar ni borrar nada. Rótala (genera otra,
+`install-reader.sh --pubkey` de nuevo: sustituye la línea). *Qué pasa si te roban la clave age privada:* eso sí es grave (ver arriba).
+
+Pruebas que **debes ver tú** (la restricción funciona de verdad; nada de esto cambia el servidor):
+
+```powershell
+.\deploy\backup\download-backups.ps1 -SshTarget cwbackup@HOST -List      # lista las copias
+ssh -i "$env:USERPROFILE\.ssh\controlweb_backup_ed25519" cwbackup@HOST id < NUL        # debe decir «refused: empty request»: NO ejecuta id, NO da shell
+ssh -i "$env:USERPROFILE\.ssh\controlweb_backup_ed25519" cwbackup@HOST "get ../../etc/passwd" < NUL   # «refused: empty request»: la orden de la línea se ignora
+```
+
+#### 3. Descargar
+
+```powershell
+[Environment]::SetEnvironmentVariable('CONTROLWEB_BACKUP_SSH', 'cwbackup@HOST', 'User')    # una vez; reabre PowerShell
+.\deploy\backup\download-backups.ps1 -DryRun                                # qué haría
+.\deploy\backup\download-backups.ps1                                        # descarga lo que falte a ~\controlweb-backups
+.\deploy\backup\download-backups.ps1 -Status                                # copia más reciente, última ejecución, tarea programada
+```
+
+Para cada copia que falta: `get` a un fichero `.partial` (la redirección la hace `cmd.exe`: `ssh … < petición.txt > copia.partial`, byte a byte;
+**ni tuberías de PowerShell con datos binarios ni `>` de PowerShell**, que en 5.1 los convierten a texto y los corrompen); compara el **tamaño** con
+el que dice el servidor; compara el **SHA-256** con el que calcula el servidor; comprueba la **cabecera `age-encryption.org/v1`**; y solo entonces
+renombra. Si algo falla borra el parcial, **no toca las copias buenas**, escribe `last-failure.txt` y sale con 1. La rotación local (`-Keep 30`) solo se
+hace tras una ejecución completa y buena. Salida 3 = la copia más reciente **del servidor** tiene más de `-MaxAgeHours` (36 h): el servidor dejó de
+hacer copias aunque la descarga funcione. *Límite honesto:* el SHA-256 lo calcula el mismo servidor, así que detecta errores de transferencia, no un
+servidor malicioso; la prueba real es `-VerifyRestore`.
+
+#### 4. Tarea programada de Windows
+
+```powershell
+.\deploy\backup\download-backups.ps1 -InstallTask -SshTarget cwbackup@HOST -TaskTime 10:00      # diaria; -RemoveTask la quita
+Get-ScheduledTaskInfo -TaskName 'ControlWeb backup download' | Format-List LastRunTime, LastTaskResult, NextRunTime
+```
+
+La tarea corre como **tu usuario, solo cuando has iniciado sesión** (no guarda tu contraseña), sin elevar permisos, también con batería, y solo si hay red.
+
+- **Si el PC está apagado a las 10:00**: `StartWhenAvailable` la ejecuta en cuanto se pueda tras arrancar e iniciar sesión (una sola vez; descarga todo lo que falte). El servidor guarda 14 días: si el PC pasa más de 14 días apagado, las copias de ese hueco se pierden para tu PC (siguen siendo copias del servidor mientras no rote).
+- **Si falla** (sin red, clave mala, servidor caído…): reintenta 3 veces cada 30 min; sale con 1 (fallo) o 3 (servidor sin copias recientes).
+- **Cómo ver que falló**: no hay aviso emergente (no quiero que un fallo silencioso parezca un éxito, pero tampoco fingir una alerta que no existe). Mira:
+  1. `.\deploy\backup\download-backups.ps1 -Status` (sale con 1 si la copia local más reciente tiene más de 36 h) y qué dice `last-run.txt` / `last-failure.txt` en `~\controlweb-backups`.
+  2. `Get-ScheduledTaskInfo` (`LastTaskResult` distinto de 0 = falló) o el Programador de tareas (`taskschd.msc`).
+  3. `~\controlweb-backups\download.log` (todo lo que hizo, con hora UTC).
+  Hábito recomendado: los domingos, `-Status`; el primer domingo de cada mes, `-VerifyRestore`.
+
+#### 5. Comprobar en tu PC que una copia descargada se descifra y se restaura de verdad
+
+```powershell
+winget install FiloSottile.age                                                                  # si aún no lo tienes
+.\deploy\backup\download-backups.ps1 -VerifyRestore -Identity "$env:USERPROFILE\.controlweb\backup-identity.txt"
+# una copia concreta (cualquiera de las descargadas):
+.\deploy\backup\download-backups.ps1 -VerifyRestore -Identity "$env:USERPROFILE\.controlweb\backup-identity.txt" -CopyName controlweb-20260101T041500Z.dump.age
+```
+
+Necesita Docker Desktop en marcha (~512 MiB durante 1–2 minutos). Qué hace, en este orden: (1) `age --decrypt -i IDENTIDAD -o ...\restore.dump COPIA` (age escribe
+el fichero él mismo, **sin tuberías**; la identidad no se imprime ni se copia); (2) comprueba que lo descifrado empieza por `PGDMP` (un archivo de
+PostgreSQL); (3) arranca un PostgreSQL desechable con **la misma imagen exacta que `compose.prod.yml`** y límite de 512 MiB; (4) `docker cp` + `pg_restore
+--no-owner --no-privileges --exit-on-error --single-transaction`; (5) cuenta las filas de `sites`, `checks`, `incidents`, `alert_rules`, `users` y
+`flyway_schema_history` (y la última migración); (6) **siempre**, aunque algo falle, borra el contenedor y la carpeta temporal con el volcado descifrado.
+Termina con `RESTORE OK` y estado 0, o `RESTORE FAILED` y estado 1.
+
+Dónde queda el volcado descifrado mientras dura: en `%TEMP%\controlweb-verify-…` y dentro del contenedor, ambos borrados al terminar. Borrar en NTFS no
+sobrescribe los bloques: si te importa, activa BitLocker o el «cifrado de dispositivo» de Windows (Configuración → Privacidad y seguridad). A mano, sin el
+script (si falla algo y quieres ver dónde): `age --decrypt -i IDENTIDAD -o restore.dump COPIA.age`, luego `docker run -d --name prueba -m 512m -e POSTGRES_PASSWORD=cualquiera -e POSTGRES_DB=prueba <imagen de compose.prod.yml>`,
+`docker cp restore.dump prueba:/tmp/`, `docker exec prueba pg_restore -U postgres -d prueba --no-owner --no-privileges --single-transaction /tmp/restore.dump`,
+`docker rm -f prueba`. **Nunca** `age -d … | docker exec -i …` en PowerShell 5.1 (la tubería corrompe datos binarios).
+
+*Pruebas de C7b-3 y qué cubren:* `ServeBackupScriptTest` (8 casos; en CI también) — salida exacta byte a byte con todos los valores de byte, más de 30 peticiones hostiles
+rechazadas sin salida, solo lectura, enlace simbólico rechazado. `InstallReaderScriptTest` (7 casos; Linux, **también en CI**) — línea de clave exacta, modos, cuenta creada una sola vez,
+rechazos de claves privadas/con opciones/RSA/varias/vacías/age, validación de `--from`, `visudo` que rechaza. `DownloadBackupsScriptTest` (16 casos; Windows, `@Tag("slow-scripts")`)
+ejecuta el script **real** con un sustituto de `ssh.exe` que ejecuta el `serve-backup.sh` real: binario idéntico, repetición sin descargas, copia nueva,
+descarga corrupta/truncada/checksum falso/sin cabecera age rechazadas sin dejar nada, fallo de conexión, rotación solo tras éxito, servidor obsoleto (3), `-Status`, `-DryRun`,
+reglas estáticas y `-VerifyRestore` contra un `age` y un `docker` falsos (éxito, `pg_restore` que falla, tabla ausente, identidad errónea, no es un archivo, Docker parado: siempre limpia).
+`FastProfileGuardianTest` y el paso de CI vigilan que estas clases se ejecuten siempre en CI (las de Windows solo se ejecutan en Windows).
+
+*Mutaciones verificadas de C7b-3* (cada una hace fallar tests): `serve-backup.sh` sin comprobar el patrón del nombre, sin el filtro de caracteres, o escribiendo
+en la carpeta; `download-backups.ps1` sin comparar el SHA-256, sin comparar el tamaño, sin comprobar la cabecera age, dejando el `.partial` malo, con
+`StrictHostKeyChecking=no`, rotando antes de comprobar, sin tratar como error la copia obsoleta del servidor, sin borrar el contenedor, sin borrar el volcado
+descifrado, sin comprobar `PGDMP` y sin tratar como error una tabla ausente (14 en total); y, en WSL Ubuntu, `install-reader.sh` sin la comprobación del formato de la clave
+(instalaría una clave con `command="/bin/sh"` delante). Además se vio que sudo en Ubuntu puede ejecutar el comando en un pseudo-terminal y estropear datos binarios:
+por eso la regla lleva `Defaults:cwbackup !use_pty` (sin terminal en este flujo no se pierde nada) y, de todos modos, el SHA-256 y el tamaño harían fallar la descarga en voz alta.
+**Lo primero que debes mirar al probarlo en el servidor** es que `-List` funciona y que la primera descarga termina sin «checksum mismatch».
+
 ## 13. Pasos
 
 ### Fase A: solo este repo
@@ -776,7 +943,7 @@ desde el instalador, ejecutar el script desde el clon y ampliar `ReadWritePaths`
 | **C7a [CW]** ✅ | `release.ps1` y `deploy.sh` con vuelta atrás | Hecho: ver «Implementación de C7a» | revert |
 | **C7b-1 [CW]** ✅ | Scripts de copia cifrada con `age`, restauración, prueba de restauración e instalador | Hecho: ver «Implementación de C7b-1» | revert |
 | **C7b-2 [CW]** ✅ | Units de systemd (copia 04:15 UTC, prueba semanal), regla de `sudoers` validada con `visudo -c` | Hecho: ver «Implementación de C7b-2» | revert |
-| **C7b-3 [CW]** | Descarga a tu PC (`download-backups.ps1`), clave SSH restringida, tarea programada de Windows, verificación de restauración local | tests de `download-backups.ps1` | revert |
+| **C7b-3 [CW]** ✅ | Descarga a tu PC (`download-backups.ps1`), clave SSH restringida, tarea programada de Windows, verificación de restauración local | Hecho: ver «Implementación de C7b-3» | revert |
 | **C7c [CW]** | Cortafuegos de salida (`controlweb-firewall`), `caddy-install.sh`, fragmento de Caddy y shellcheck en CI | `bash -n`, shellcheck, revisión | revert |
 
 **Requisitos de C5 (añadidos al aprobar C1):**
