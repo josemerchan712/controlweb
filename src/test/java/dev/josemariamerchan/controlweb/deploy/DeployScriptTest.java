@@ -127,10 +127,7 @@ class DeployScriptTest {
 		bin = Files.createDirectories(temp.resolve("bin"));
 		for (String[] stub : new String[][] { { "deploy-docker", "docker" }, { "deploy-systemctl", "systemctl" },
 				{ "deploy-sudo", "sudo" } }) {
-			String script = new String(getClass().getResourceAsStream("/fakedocker/" + stub[0] + ".sh").readAllBytes(),
-					StandardCharsets.UTF_8).replace("\r\n", "\n");
-			write(bin.resolve(stub[1]), script);
-			bin.resolve(stub[1]).toFile().setExecutable(true);
+			ScriptFixtures.copyResource("/fakedocker/" + stub[0] + ".sh", bin, stub[1]);
 		}
 		state = Files.createDirectories(temp.resolve("fake-state"));
 		envFile = temp.resolve("env.prod");

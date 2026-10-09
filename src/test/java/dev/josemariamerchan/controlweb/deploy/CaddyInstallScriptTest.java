@@ -41,6 +41,7 @@ class CaddyInstallScriptTest {
 	private Path caddyfile;
 	private Path fragment;
 	private Path tmp;
+	private Path fakeDocker;
 
 	private record Result(int exit, String output) {
 	}
@@ -64,6 +65,7 @@ class CaddyInstallScriptTest {
 		sites = Files.createDirectories(temp.resolve("caddy-sites"));
 		state = Files.createDirectories(temp.resolve("state"));
 		tmp = Files.createDirectories(temp.resolve("tmp"));
+		fakeDocker = ScriptFixtures.copyFile(Path.of("src/test/resources/fakedocker/caddy-docker.sh"), temp.resolve("bin"), "docker");
 		caddyfile = temp.resolve("Caddyfile");
 		Files.writeString(caddyfile, "{\n\temail ops@example.com\n}\n\nrottenodds-api.josemariamerchan.dev {\n\treverse_proxy api:8080\n}\n\n# other projects\nimport /etc/caddy/sites/*.caddy\n");
 		Files.writeString(sites.resolve("rottenodds-extra.caddy"), ROTTEN);
@@ -79,7 +81,7 @@ class CaddyInstallScriptTest {
 		Map<String, String> env = builder.environment();
 		env.put("ALLOW_NON_ROOT", "1");
 		env.put("SITES_DIR", slashes(sites));
-		env.put("DOCKER", slashes(Path.of("src/test/resources/fakedocker/caddy-docker.sh")));
+		env.put("DOCKER", slashes(fakeDocker));
 		env.put("LOCK_DIR", slashes(temp.resolve("lock")));
 		env.put("TMPDIR", slashes(tmp));
 		env.put("FAKE_STATE", slashes(state));

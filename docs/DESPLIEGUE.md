@@ -69,7 +69,7 @@ a un fichero tuyo y compáralas con la columna «Esperado». **Si el resultado c
 | 16 | **Panel de Hetzner → servidor → Backups** | **Actívalas ya** (+20 %, ≈ 1,33 €/mes). La primera copia puede tardar hasta un día en aparecer y R1 exige que exista | no puedes activarlas: R1 no se hace |
 | 17 | PC: `git status` limpio, en `main`, `git log origin/main..` vacío, y el CI de ese commit **en verde** en GitHub (yo no puedo verlo) | todo limpio y verde | CI en rojo o cambios sin subir |
 | 18 | PC: `ssh -o BatchMode=yes HOST true; echo $LASTEXITCODE` y `docker info` | `0` y Docker Desktop en marcha | no entra por clave sin contraseña |
-| 19 | PC: `.\mvnw.cmd verify` (≈ 20 min) | `BUILD SUCCESS` | cualquier fallo |
+| 19 | PC: `.\mvnw.cmd verify` (≈ 20 min) **y** `powershell -File deploy/test-linux.ps1` (≈ 6 min; los tests de los scripts en Linux, como el CI) | `BUILD SUCCESS` y `LINUX OK` | cualquier fallo en cualquiera de los dos |
 | 20 | Anota el valor de `<IP_PUBLICA_VPS>`, el origen exacto de tu portfolio (para CORS, p. ej. `https://josemariamerchan.dev`) y tu email de administrador | los tres anotados fuera de este repositorio | — |
 
 ## Guía de ejecución

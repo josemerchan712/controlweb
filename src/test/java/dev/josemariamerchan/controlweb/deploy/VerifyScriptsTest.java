@@ -58,10 +58,7 @@ class VerifyScriptsTest {
 
 	private Path fakeDocker(String resource) throws IOException {
 		Path directory = Files.createDirectories(temp.resolve("bin-" + resource));
-		String script = new String(getClass().getResourceAsStream("/fakedocker/" + resource + ".sh").readAllBytes(),
-				StandardCharsets.UTF_8).replace("\r\n", "\n");
-		Files.writeString(directory.resolve("docker"), script, StandardCharsets.UTF_8);
-		directory.resolve("docker").toFile().setExecutable(true);
+		ScriptFixtures.copyResource("/fakedocker/" + resource + ".sh", directory, "docker");
 		return directory;
 	}
 

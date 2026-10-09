@@ -263,6 +263,8 @@ Todos los errores son `application/problem+json` (RFC 9457) y no incluyen trazas
 .\mvnw.cmd verify
 ```
 
+Los tests de los scripts de `deploy/` se ejecutan también **en Linux** antes de cada commit que los toque (`powershell -File deploy/test-linux.ps1`; Windows no detecta falsos sin bit de ejecución, finales de línea ni el orden de un `HashSet`; ver `CLAUDE.md`).
+
 Para iterar en un portátil con Windows, `.\mvnw.cmd verify -Pfast` salta las cinco clases etiquetadas `slow-scripts` (los tests que
 ejecutan los scripts de bash reales: unos 8 de los 13 minutos de un `verify` completo). El perfil **no está activo por defecto**: el
 `verify` normal y el CI ejecutan siempre todo, y antes de cada commit se usa el `verify` completo.

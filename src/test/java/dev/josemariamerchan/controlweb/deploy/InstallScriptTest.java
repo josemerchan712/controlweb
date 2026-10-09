@@ -49,8 +49,7 @@ class InstallScriptTest {
 		backups = temp.resolve("var/backups/controlweb");
 		state = temp.resolve("var/lib/controlweb-backup");
 		bin = Files.createDirectories(temp.resolve("bin"));
-		Files.writeString(bin.resolve("age"), "#!/bin/sh\nexit 0\n");
-		bin.resolve("age").toFile().setExecutable(true);
+		ScriptFixtures.write(bin.resolve("age"), "#!/bin/sh\nexit 0\n");
 		systemd = temp.resolve("etc/systemd/system");
 		sudoers = temp.resolve("etc/sudoers.d");
 		log = temp.resolve("calls.log");
@@ -65,9 +64,7 @@ class InstallScriptTest {
 	}
 
 	private void fake(String name, String body) throws IOException {
-		Path file = bin.resolve(name);
-		Files.writeString(file, "#!/bin/sh\n" + body);
-		file.toFile().setExecutable(true);
+		ScriptFixtures.write(bin.resolve(name), "#!/bin/sh\n" + body);
 	}
 
 	private String calls() throws IOException {

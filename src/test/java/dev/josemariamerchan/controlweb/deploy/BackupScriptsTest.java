@@ -89,10 +89,7 @@ class BackupScriptsTest {
 		fakeState = Files.createDirectories(temp.resolve("fake-state"));
 		bin = Files.createDirectories(temp.resolve("bin"));
 		for (String[] stub : new String[][] { { "backup-docker", "docker" }, { "backup-age", "age" } }) {
-			String script = new String(getClass().getResourceAsStream("/fakedocker/" + stub[0] + ".sh").readAllBytes(),
-					StandardCharsets.UTF_8).replace("\r\n", "\n");
-			Files.writeString(bin.resolve(stub[1]), script, StandardCharsets.UTF_8);
-			bin.resolve(stub[1]).toFile().setExecutable(true);
+			ScriptFixtures.copyResource("/fakedocker/" + stub[0] + ".sh", bin, stub[1]);
 		}
 		recipientFile = temp.resolve("backup-recipient.txt");
 		Files.writeString(recipientFile, "# public key\n" + RECIPIENT + "\n");
@@ -200,8 +197,10 @@ class BackupScriptsTest {
 		Result result = backup(Map.of());
 
 		assertThat(result.exit()).isZero();
-		assertThat(Files.getPosixFilePermissions(stored().get(0)).toString()).isEqualTo("[OWNER_READ, OWNER_WRITE]");
-		assertThat(Files.getPosixFilePermissions(backups).toString()).isEqualTo("[OWNER_READ, OWNER_WRITE, OWNER_EXECUTE]");
+		// PosixFilePermissions.toString gives a fixed order; the toString() of the Set returned by Files.getPosixFilePermissions is a HashSet
+		// of enum constants whose order depends on identity hash codes, i.e. on what ran earlier in the same JVM
+		assertThat(java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(stored().get(0)))).isEqualTo("rw-------");
+		assertThat(java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(backups))).isEqualTo("rwx------");
 	}
 
 	@Test

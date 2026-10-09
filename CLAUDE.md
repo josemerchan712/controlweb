@@ -353,6 +353,18 @@ se acepta, se borra el parcial y **no se rota nada** (rotación: 14 días, siemp
 `restore.sh` exige `--yes`, una identidad en RAM (`/dev/shm`), comprueba antes de tocar nada, hace copia previa, para la app y restaura en una
 transacción. Pruebas: `BackupScriptsTest`, `InstallScriptTest`. Detalle y comandos en `docs/DESPLIEGUE.md`.
 
+## REGLA: los tests de scripts se prueban en Linux (no solo en Windows)
+Windows esconde fallos que Linux (el CI y el servidor) ve: los ficheros no tienen bit de ejecución, los finales de línea, el orden de un `HashSet`... Aprendido a la mala: el CI #15
+falló 26 veces en Linux con todo verde en Windows (los falsos de `src/test/resources/fakedocker` están en git con modo 0644 y dos clases los ejecutaban directamente: «Permission denied»/exit 126).
+- **Ninguna clase de tests que ejecute scripts se da por buena si solo ha corrido en Windows.** Antes de cada commit que añada o cambie scripts, units, fakes o sus tests:
+  `powershell -File deploy/test-linux.ps1` (Ubuntu + JDK 21 en un contenedor, usuario NO root, árbol hecho con `git archive` como un checkout de CI; unos 6 min; `-Tests Clase1,Clase2` para iterar).
+  Debe terminar en `LINUX OK` (las clases del paso «Check that the script tests really ran here» del CI con 0 omitidas). No se hace commit con `LINUX FAILED`.
+- **Automatizado:** `git config core.hooksPath deploy/hooks` (una vez por clon) activa `deploy/hooks/pre-commit`, que lanza `test-linux.ps1 -Staged` si el commit toca `deploy/`, `*.sh`, los fakes,
+  los tests de `deploy/` o el workflow. Nunca `--no-verify`. El CI sigue siendo la red de seguridad.
+- **Los fakes se crean SOLO con `ScriptFixtures`** (`write`, `copyResource`, `copyFile`): copia en la carpeta temporal del test, LF, ejecutable y COMPROBADO. Nada de `setExecutable` ni de pasar a un script
+  una ruta de `fakedocker/` directamente. Los modos se comparan como `rwx------` (`PosixFilePermissions.toString`), nunca con el `toString()` del `Set`. `ScriptTestsGuardianTest` lo vigila.
+- Los `.sh`, units, `.sudoers` y `.caddy` son LF en el repositorio (`.gitattributes`). Cuidado al probar con `git archive` en Windows: con `core.autocrlf=true` convierte a CRLF (usa `-c core.autocrlf=false`, como hace el script).
+
 ## Tests lentos (`slow-scripts`)
 `BackupScriptsTest`, `DeployScriptTest`, `VerifyScriptsTest` y `DownloadBackupsScriptTest` y `FirewallScriptTest` llevan `@Tag("slow-scripts")` (unos 8 min de los 13 de un `verify` en Windows).
 `-Pfast` (perfil de `pom.xml`, **sin activación por defecto**) los excluye vía `test.excluded.groups`. Regla: `-Pfast` solo para iterar;

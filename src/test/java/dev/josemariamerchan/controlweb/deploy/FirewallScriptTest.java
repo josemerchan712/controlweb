@@ -45,6 +45,7 @@ class FirewallScriptTest {
 	private Path state;
 	private Path conf;
 	private Path dockerLog;
+	private Path fakeIptables;
 
 	private record Result(int exit, String output) {
 	}
@@ -68,6 +69,7 @@ class FirewallScriptTest {
 		state = Files.createDirectories(temp.resolve("ipt"));
 		conf = temp.resolve("firewall.conf");
 		dockerLog = temp.resolve("docker.log");
+		fakeIptables = ScriptFixtures.copyFile(Path.of("src/test/resources/fakedocker/fake-iptables.sh"), temp.resolve("bin"), "iptables");
 		Files.writeString(conf, "# comment\nPUBLIC_IP=" + PUBLIC_IP + "\n");
 		seedOtherPeoplesRules();
 	}
@@ -84,7 +86,7 @@ class FirewallScriptTest {
 		command.addAll(List.of(arguments));
 		ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true);
 		builder.directory(Path.of("").toAbsolutePath().toFile());
-		builder.environment().put("IPTABLES", slashes(Path.of("src/test/resources/fakedocker/fake-iptables.sh")));
+		builder.environment().put("IPTABLES", slashes(fakeIptables));
 		builder.environment().put("FAKE_IPT_STATE", slashes(state));
 		builder.environment().put("CONF_FILE", slashes(conf));
 		builder.environment().put("ALLOW_NON_ROOT", "1");
@@ -451,11 +453,8 @@ class FirewallScriptTest {
 
 	/** A docker that answers `ps -q` with the given container ids (one per line, may be empty) and logs every call. */
 	private Path fakeDocker(String ids, boolean stopFails) throws IOException {
-		Path docker = temp.resolve("docker");
-		Files.writeString(docker, "#!/bin/sh\necho \"$*\" >> '" + slashes(dockerLog) + "'\n"
+		return ScriptFixtures.write(temp.resolve("docker"), "#!/bin/sh\necho \"$*\" >> '" + slashes(dockerLog) + "'\n"
 				+ "case \"$1\" in ps) printf '%s' '" + ids + "' ;; stop) " + (stopFails ? "exit 1" : "exit 0") + " ;; esac\n");
-		docker.toFile().setExecutable(true);
-		return docker;
 	}
 
 	private String dockerCalls() throws IOException {

@@ -46,9 +46,7 @@ class InstallFirewallScriptTest {
 	}
 
 	private void fake(String name, String body) throws IOException {
-		Path file = bin.resolve(name);
-		Files.writeString(file, "#!/bin/sh\n" + body);
-		file.toFile().setExecutable(true);
+		ScriptFixtures.write(bin.resolve(name), "#!/bin/sh\n" + body);
 	}
 
 	private String run(String... command) throws Exception {

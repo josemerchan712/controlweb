@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Git pre-commit hook: if the commit touches shell scripts, their units/fragments, the fakes or the tests that drive them, those tests are
+# run on LINUX (deploy/test-linux.ps1) before the commit is made. Windows passes things that Linux (CI, the server) rejects.
+#
+# Turn it on once per clone:   git config core.hooksPath deploy/hooks
+# Never skip it with --no-verify: a red CI is the price.
+set -u
+
+files=$(git diff --cached --name-only --diff-filter=ACMR)
+echo "$files" | grep -Eq '(^deploy/)|(\.sh$)|(^src/test/resources/fakedocker/)|(^src/test/java/.*/deploy/)|(^\.github/workflows/)|(^\.gitattributes$)' || exit 0
+
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*) ;;
+  *) echo "pre-commit: not on Windows, the script tests already run on Linux here"; exit 0 ;;
+esac
+
+echo "pre-commit: this commit touches scripts or their tests -> running them on Linux (a few minutes)..."
+if powershell.exe -NoProfile -ExecutionPolicy Bypass -File deploy/test-linux.ps1 -Staged; then exit 0; fi
+echo "pre-commit: the tests FAIL on Linux, so CI would be red. Fix them (or run deploy/test-linux.ps1 -Tests <Class> to iterate)." >&2
+exit 1
