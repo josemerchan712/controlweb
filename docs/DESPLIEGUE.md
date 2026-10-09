@@ -433,6 +433,47 @@ sin hairpin en 443; sin bloquear 169.254/16; `stop` que borra cadenas antes que 
 INPUT sin aceptar lo establecido; errores de iptables leídos como «ausente»; salto de INPUT al final en vez de al principio; la regla 5 que rechaza todo; 172.16/12 recortado; y, en las units, `Requires=docker.service`, quitar `Before=docker.service`,
 guardián sin `After=docker.service`, sin guardián al parar, `PartOf=docker.service` y `deploy.sh` sin `check_firewall`.
 
+### Implementación de C7c-2: `caddy-install.sh` y el fragmento de Caddy
+
+`deploy/caddy/controlweb.caddy` es el fragmento de arriba (sin cambios) y `deploy/caddy/caddy-install.sh` es lo único que lo instala. Se ejecuta con `sudo` desde
+el clon revisado, y solo después de que Rotten Odds tenga hecho su cambio mínimo (R1: el `import` en su Caddyfile y el volumen `/opt/caddy-sites:/etc/caddy/sites:ro`).
+
+```bash
+sudo deploy/caddy/caddy-install.sh --check      # solo valida (pasos 1 y 2); no cambia nada, no recarga
+sudo deploy/caddy/caddy-install.sh              # valida, mueve, recarga
+curl -sI https://status-api.josemariamerchan.dev/actuator/health | head -3             # desde fuera
+```
+
+*Qué hace, en este orden* (cada fallo termina con `exit 1` y la carpeta `/opt/caddy-sites` **idéntica a como estaba**):
+
+1. **Mira el fragmento** (solo sus líneas, sin Docker): tamaño 1 B–8 KiB, sin bytes NUL; el **único** bloque de primer nivel es `status-api.josemariamerchan.dev {` (nada de otro dominio, de
+   opciones globales ni de un segundo sitio: así este fragmento no puede secuestrar el dominio de Rotten Odds); el **único** `reverse_proxy` es `controlweb-app:8080`; prohíbe `import`, `exec`,
+   `file_server`, `root`, `tls`, `log`, `admin`, `storage`, `handle_path`, `rewrite`..., y los marcadores que leen el entorno o ficheros (`{$X}`, `{env.X}`, `{file.X}`).
+2. **Localiza el Caddy que corre**: exactamente **un** contenedor en marcha del proyecto de Compose `rottenodds`, servicio `caddy` (por etiquetas; `CADDY_CONTAINER=nombre` lo fija a mano). Comprueba
+   que tiene montados el Caddyfile (lo lee en el host) y `/opt/caddy-sites` en `/etc/caddy/sites`, y que el Caddyfile tiene la línea `import /etc/caddy/sites/*.caddy`: si no, se niega, porque el fragmento
+   no se leería nunca (R1 sin hacer).
+3. **Valida con un contenedor desechable de la MISMA imagen** (el **id** `sha256:…` de la imagen del contenedor que corre, no una etiqueta que pudo cambiar): `--rm`, `--network none`, `--read-only`
+   (con `tmpfs` para `/tmp`, `/data` y `/config`), `--cap-drop ALL`, `no-new-privileges`, 256 MiB, el **mismo entorno** que el Caddy real (por si el Caddyfile usa variables; el fichero temporal
+   con el entorno es privado y se borra al terminar), el Caddyfile real en solo lectura, y una **copia** de la carpeta de sitios que ya contiene el fragmento nuevo junto con todos los de los demás
+   proyectos: se valida la configuración completa, no el fragmento suelto. La carpeta real no se monta nunca.
+4. **Mueve con un renombrado atómico**: el fichero se escribe como `.controlweb.caddy.new` (empieza por punto y no acaba en `.caddy`: el `import` nunca puede leer un fichero a medias) y se renombra a
+   `controlweb.caddy` con `mv` en la misma carpeta. El fragmento anterior, si lo había, se guarda antes como `.controlweb.caddy.previous` (oculto, tampoco lo lee el `import`).
+5. **Recarga sin corte** (`docker exec <caddy> caddy reload`, que es graceful). Si falla: devuelve el fragmento anterior con otro renombrado (o borra el nuevo si no había anterior), vuelve a
+   recargar por si el primer intento sí se aplicó pese al error (un *timeout*), y sale con error.
+
+Nunca toca los fragmentos de otros proyectos y toma un cerrojo (`mkdir`) para que no corran dos a la vez. Deshacer a mano: `sudo mv -f /opt/caddy-sites/.controlweb.caddy.previous /opt/caddy-sites/controlweb.caddy`
+o `sudo rm /opt/caddy-sites/controlweb.caddy`, y en ambos casos `docker exec <caddy> caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile`.
+
+*Límites honestos:* `caddy validate` comprueba la sintaxis y el aprovisionamiento de módulos, **no** que `controlweb-app` resuelva ni responda (hasta la fase D no existe en la red de Caddy) ni que el certificado se pueda emitir
+(DNS y puertos 80/443 son de la fase D); `caddy reload` aplica lo que dicen los ficheros, así que cualquier cambio hecho a Caddy solo por la API de administración se perdería (igual que con un reload normal de Rotten Odds).
+
+*Pruebas:* `CaddyInstallScriptTest` (15 casos, también en CI) con un `docker` falso: instalación nueva y actualización (el fragmento ya estaba en su sitio cuando Caddy recargó, el anterior se conserva,
+ningún fichero temporal que el `import` pudiera leer, el entorno de Caddy no aparece en logs), `--check`, validación que falla, validador que no puede ejecutarse, **recarga que falla** (con y sin fragmento previo: byte a byte como antes y una segunda recarga),
+recarga que falla solo la primera vez, 9 situaciones de entorno incorrectas (ningún Caddy, dos, imagen sin id, sin Caddyfile, sin montaje de sitios, montaje de otra carpeta, sin línea `import`) rechazadas **antes** de ejecutar nada, 24 fragmentos
+prohibidos rechazados **antes** de preguntarle nada a Docker, cerrojo ajeno, argumentos, el fragmento del repositorio (validado y con sus cabeceras/404 de rutas ocultas) y la estructura atómica del código. También se ejecutó a mano en WSL Ubuntu (herramientas GNU).
+*Mutaciones verificadas* (20, todas hacen fallar tests): saltarse la validación; validar con otra imagen o con red; no deshacer tras una recarga fallida (con y sin anterior); no exigir el `import`; no exigir el dominio; no comprobar el montaje; validar la carpeta
+real en vez de la copia; aceptar el primero de varios Caddy; recargar en `--check`; copiar en vez de renombrar; no guardar el anterior; no exigir el upstream; desactivar la lista de directivas o de marcadores; ignorar el cerrojo; no borrar la carpeta de trabajo; y, en el fragmento, quitar el 404 de las rutas ocultas o apuntar a otro upstream.
+
 ## 11. Pruebas SSRF de límites
 
 `HostSafetyValidator` (resolver falso). **Permitir:** 172.67.164.248, 104.21.49.164, 172.15.255.255, 172.32.0.0, 100.63.255.255,
@@ -1035,7 +1076,7 @@ por eso la regla lleva `Defaults:cwbackup !use_pty` (sin terminal en este flujo 
 | **C7b-1 [CW]** ✅ | Scripts de copia cifrada con `age`, restauración, prueba de restauración e instalador | Hecho: ver «Implementación de C7b-1» | revert |
 | **C7b-2 [CW]** ✅ | Units de systemd (copia 04:15 UTC, prueba semanal), regla de `sudoers` validada con `visudo -c` | Hecho: ver «Implementación de C7b-2» | revert |
 | **C7b-3 [CW]** ✅ | Descarga a tu PC (`download-backups.ps1`), clave SSH restringida, tarea programada de Windows, verificación de restauración local | Hecho: ver «Implementación de C7b-3» | revert |
-| **C7c [CW]** | Cortafuegos de salida (`controlweb-firewall`), `caddy-install.sh`, fragmento de Caddy y shellcheck en CI | `bash -n`, shellcheck, revisión | revert |
+| **C7c [CW]** | Cortafuegos de salida (`controlweb-firewall`), `caddy-install.sh`, fragmento de Caddy y shellcheck en CI | C7c-1 y C7c-2 hechos (ver sus secciones); falta C7c-3 (shellcheck en CI) | revert |
 
 **Requisitos de C5 (añadidos al aprobar C1):**
 - El perfil `prod` **debe negarse a arrancar si `app.proxy.trusted-addresses` está vacío**, con test. Sin esa IP todos los

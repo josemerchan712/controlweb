@@ -1,0 +1,20 @@
+status-api.josemariamerchan.dev {
+	encode zstd gzip
+	request_body {
+		max_size 64KB
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		Content-Security-Policy "default-src 'none'; frame-ancestors 'none'"
+		-Server
+	}
+	@hidden {
+		path /actuator* /v3/api-docs* /swagger-ui*
+		not path /actuator/health
+	}
+	respond @hidden 404
+	reverse_proxy controlweb-app:8080
+}
