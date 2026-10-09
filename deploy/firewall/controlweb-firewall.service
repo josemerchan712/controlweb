@@ -8,7 +8,7 @@
 #     Docker from starting, and `systemctl stop controlweb-firewall` would stop Docker: Rotten Odds would go down with it.
 #   * with Before= alone, a failed firewall leaves Docker (and Rotten Odds) untouched. The price is that ControlWeb's own container
 #     could start without rules after a reboot; controlweb-firewall-guard.service (After=docker.service) closes that gap by stopping
-#     ONLY the container controlweb-app when the rules are not in place, and deploy.sh refuses to deploy while this unit is not active.
+#     ONLY the container of the Compose service controlweb-app when the rules are not in place, and deploy.sh refuses to deploy while this unit is not active.
 [Unit]
 Description=ControlWeb egress firewall (rules hang off the Docker bridge cw-egress only)
 Documentation=file:///usr/local/sbin/controlweb-firewall

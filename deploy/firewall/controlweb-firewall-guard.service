@@ -1,9 +1,9 @@
 # Fail-closed guard for the ControlWeb application after a reboot.
 #
 # Docker restarts containers by itself (restart: unless-stopped). If the firewall did not come up, this unit stops THE CONTAINER
-# controlweb-app (nothing else: it checks that the container belongs to the compose project "controlweb") so the application never runs
+# of the Compose service controlweb-app of the project "controlweb" (found by its Compose labels; nothing else) so the application never runs
 # without its rules. It never fails the boot and never touches Docker itself, Rotten Odds or any other container.
-# After fixing the firewall, start the application again with deploy.sh (or `docker start controlweb-app`).
+# After fixing the firewall, start the application again with deploy.sh (or `docker compose -p controlweb start controlweb-app`).
 #
 # Installed by deploy/firewall/install.sh as root:root 0644. Not a dependency of anything: it only orders itself after Docker.
 [Unit]

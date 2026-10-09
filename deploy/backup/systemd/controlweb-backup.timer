@@ -1,6 +1,6 @@
-# Daily encrypted backup at 04:15 UTC, after the Rotten Odds backup (03:30 UTC plus up to 10 minutes) and after the nightly purge of old
-# checks of ControlWeb (app.retention.cron, 03:30), so a copy never races with a purge. Persistent: if the server was off at 04:15 the
-# backup runs as soon as it is on again.
+# Daily encrypted backup at 04:15 UTC, after the Rotten Odds backup (03:30 UTC plus up to 10 minutes) and BEFORE the nightly purge of old
+# checks of ControlWeb (app.retention.cron in application-prod.yml, 04:45), so a copy never races with a purge. Persistent: if the
+# server was off at 04:15 the backup runs as soon as it is on again.
 [Unit]
 Description=Daily encrypted backup of the ControlWeb database
 

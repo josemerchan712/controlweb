@@ -449,10 +449,11 @@ class FirewallScriptTest {
 		assertThat(firewall(Map.of(), "status").exit()).isEqualTo(1);
 	}
 
-	private Path fakeDocker(String label, boolean stopFails) throws IOException {
+	/** A docker that answers `ps -q` with the given container ids (one per line, may be empty) and logs every call. */
+	private Path fakeDocker(String ids, boolean stopFails) throws IOException {
 		Path docker = temp.resolve("docker");
 		Files.writeString(docker, "#!/bin/sh\necho \"$*\" >> '" + slashes(dockerLog) + "'\n"
-				+ "case \"$1\" in inspect) [ -n '" + label + "' ] && echo '" + label + "' || exit 1 ;; stop) " + (stopFails ? "exit 1" : "exit 0") + " ;; esac\n");
+				+ "case \"$1\" in ps) printf '%s' '" + ids + "' ;; stop) " + (stopFails ? "exit 1" : "exit 0") + " ;; esac\n");
 		docker.toFile().setExecutable(true);
 		return docker;
 	}
@@ -462,9 +463,9 @@ class FirewallScriptTest {
 	}
 
 	@Test
-	@DisplayName("guard: firewall active -> touches nothing; inactive -> stops ONLY controlweb-app, and only if it belongs to the compose project controlweb")
+	@DisplayName("guard: firewall active -> touches nothing; inactive -> stops ONLY the containers of the service controlweb-app of the compose project controlweb (found by labels)")
 	void guard() throws Exception {
-		Path docker = fakeDocker("controlweb", false);
+		Path docker = fakeDocker("1a2b3c4d5e6f", false);
 		start();
 		assertThat(firewall(Map.of("DOCKER", slashes(docker)), "guard").exit()).isZero();
 		assertThat(dockerCalls()).as("active firewall: Docker is not even asked").isEmpty();
@@ -472,17 +473,18 @@ class FirewallScriptTest {
 		firewall(Map.of(), "stop");
 		Result inactive = firewall(Map.of("DOCKER", slashes(docker)), "guard");
 		assertThat(inactive.exit()).isZero();
-		assertThat(dockerCalls().strip().lines().toList()).containsExactly("inspect --format {{index .Config.Labels \"com.docker.compose.project\"}} controlweb-app", "stop controlweb-app");
+		assertThat(dockerCalls().strip().lines().toList()).containsExactly("ps -q --filter label=com.docker.compose.project=controlweb --filter label=com.docker.compose.service=controlweb-app", "stop 1a2b3c4d5e6f");
 		assertThat(inactive.output()).contains("was stopped");
 	}
 
 	@Test
-	@DisplayName("guard: a container with that name from another project, or no container, or a failing docker stop: nothing else is touched and it never fails")
+	@DisplayName("guard: no matching container, several matching containers, or a failing docker stop: nothing else is touched and it never fails")
 	void guardIsCareful() throws Exception {
 		Files.deleteIfExists(dockerLog);
-		Result other = firewall(Map.of("DOCKER", slashes(fakeDocker("rottenodds", false))), "guard");
-		assertThat(other.exit()).isZero();
-		assertThat(dockerCalls()).doesNotContain("stop");
+		Result several = firewall(Map.of("DOCKER", slashes(fakeDocker("aaa111\nbbb222\n", false))), "guard");
+		assertThat(several.exit()).isZero();
+		assertThat(dockerCalls().lines().filter(line -> line.startsWith("stop")).toList()).containsExactly("stop aaa111", "stop bbb222");
+		assertThat(dockerCalls().lines().filter(line -> line.startsWith("ps")).toList()).containsExactly("ps -q --filter label=com.docker.compose.project=controlweb --filter label=com.docker.compose.service=controlweb-app");
 
 		Files.deleteIfExists(dockerLog);
 		Result none = firewall(Map.of("DOCKER", slashes(fakeDocker("", false))), "guard");
@@ -490,10 +492,10 @@ class FirewallScriptTest {
 		assertThat(dockerCalls()).doesNotContain("stop");
 
 		Files.deleteIfExists(dockerLog);
-		Result failing = firewall(Map.of("DOCKER", slashes(fakeDocker("controlweb", true))), "guard");
+		Result failing = firewall(Map.of("DOCKER", slashes(fakeDocker("1a2b3c4d5e6f", true))), "guard");
 		assertThat(failing.exit()).as("the guard never fails the boot").isZero();
 		assertThat(failing.output()).contains("could not stop");
-		assertThat(dockerCalls().lines().filter(line -> line.startsWith("stop")).toList()).containsExactly("stop controlweb-app");
+		assertThat(dockerCalls().lines().filter(line -> line.startsWith("stop")).toList()).containsExactly("stop 1a2b3c4d5e6f");
 		assertThat(code()).doesNotContain("rm ").doesNotContain("kill").doesNotContain("docker compose").doesNotContain("\"$DOCKER\" rm");
 	}
 }

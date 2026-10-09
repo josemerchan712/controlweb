@@ -1,13 +1,400 @@
 # Fase 2: producción en el VPS de Hetzner (plan)
 
-> **Estado:** plan aprobado el 2026-10-08. **Nada de esto se ha ejecutado en el servidor.** Cada paso se hace por separado:
-> tests/revisión primero, un commit por paso, y se para para que el usuario lo revise.
+> **Estado:** plan aprobado el 2026-10-08. **Toda la parte de código (C0 a C7c) está hecha, probada y revisada; nada de esto se ha
+> ejecutado en el servidor.** Se sigue **la guía de ejecución de abajo, de arriba abajo**: primero «Antes de empezar en el servidor» (solo lectura)
+> y luego S1 a S10, un paso cada vez, parando en cada ⏸.
 >
 > Convenciones: **[CW]** solo este repo · **[SRV]** servidor, sin tocar Rotten Odds · **[RO]** repo de Rotten Odds (con
 > especial cuidado) · **[CF]** Cloudflare · ⏸ = parar y probar antes de seguir.
 >
 > Este documento no lleva secretos. La IP pública del VPS se escribe `<IP_PUBLICA_VPS>`; las IP internas de Docker
 > (10.77.0.0/16) solo tienen sentido dentro del servidor.
+
+# Parte I: guía de ejecución
+
+## Cómo leer este documento
+
+Tiene dos partes. **Parte I (esta, hasta «S10»): la guía de ejecución**, para seguirla **de arriba abajo**: primero las comprobaciones de solo
+lectura, luego S1 a S6 (servidor y copias), R1 (único cambio en Rotten Odds), S7 a S9 (exposición) y S10 (una semana después). Cada paso trae los
+comandos finales, qué esperar, cuándo parar (⏸) y cómo deshacerlo. **Parte II (secciones 1 a 15): diseño y referencia**: el porqué de cada decisión,
+las mediciones y las pruebas; no hace falta leerla para ejecutar la guía, pero cada paso dice qué sección explica lo que hace.
+
+Convenciones de la guía: **PC** = PowerShell 5.1 en tu portátil · **SRV** = bash en el servidor, como `jose` (con `sudo` donde se indica) · `HOST` = tu alias o
+`jose@dirección` de SSH · `<IP_PUBLICA_VPS>` = la IP pública del servidor (panel de Hetzner). **Nunca pegues un secreto en un chat ni en una terminal compartida**:
+los secretos se generan en el servidor (S3) o se copian con `scp` (S6). **No ejecutes nada en el servidor que no esté aquí**; si algo no cuadra, para y pregunta.
+
+Lo ya decidido y hecho en el código (C1 a C7), de un vistazo:
+
+| Qué | Decisión | Dónde está |
+|---|---|---|
+| Login | Rate limiting propio; la IP real solo si el peer TCP es `TRUSTED_PROXY_ADDRESSES=10.77.0.10` (Caddy); el perfil `prod` no arranca sin ello | §1, C5 |
+| Secretos | Solo en `/opt/controlweb/.env.prod` (`root:jose`, 640), generados en el servidor; el perfil `prod` rechaza valores de ejemplo | S3, C5 |
+| Imagen | Se construye en tu PC, se sube como fichero (`release.ps1`), `deploy.sh` en el servidor; vuelta atrás automática solo sin migraciones nuevas | §6, §8, C7a |
+| Firewall de salida | Todo cuelga de `cw-egress`; `Before=docker.service` pero nunca dependencia fuerte; guardián que para solo la aplicación si faltan las reglas; `deploy.sh` se niega sin firewall | §10, C7c-1 |
+| Copias | `pg_dump \| age` con clave **pública** en el servidor; privada solo en tu PC (+ gestor + papel/USB); 14 días, mínimo 3; prueba de restauración semanal | §9, C7b |
+| Descarga al PC | Cuenta `cwbackup` con una clave SSH restringida que solo puede `list`/`sha256`/`get` de copias; tarea de Windows; `-VerifyRestore` | C7b-3 |
+| Copias de Hetzner | Activas **antes de R1** (R1 exige que exista la primera); cubren también Rotten Odds | §9, R1 |
+| Caddy | Fragmento fuera del repo en `/opt/caddy-sites`, solo con `caddy-install.sh` (valida con la misma imagen, mueve atómico, recarga sin corte) | §4, C7c-2 |
+| Calidad | ShellCheck en el CI sobre todos los `.sh`; `-Pfast` solo para iterar | C7c-3 |
+
+## Antes de empezar en el servidor
+
+Todo esto es **de solo lectura** (salvo el interruptor del panel de Hetzner, que es una decisión tuya). Ejecútalo en el servidor, copia las salidas
+a un fichero tuyo y compáralas con la columna «Esperado». **Si el resultado cae en la columna «PARA», no sigas** hasta entenderlo.
+
+*En el servidor (SRV):*
+
+| # | Comando | Esperado | PARA si |
+|---|---|---|---|
+| 1 | `grep PRETTY_NAME /etc/os-release; uname -m` | Ubuntu 24.04, x86_64 | otro sistema u otra arquitectura (los comandos de apt, systemd y la imagen están pensados para Ubuntu 24.04 amd64) |
+| 2 | `docker --version; docker compose version; docker info --format '{{.ServerVersion}}'` | Docker 29.x y Compose v5.x, sin error | `docker info` falla, o la versión mayor es distinta de la del plan (entonces repasa el riesgo del hairpin del §10 antes de S5) |
+| 3 | `docker info 2>/dev/null \| grep -i firewall; sudo iptables --version; sudo iptables -S DOCKER-USER` | la línea de Docker (si aparece) dice **iptables**; `iptables` v1.8.x (`nf_tables` o `legacy`, las dos valen); existe `DOCKER-USER` y solo contiene `-N DOCKER-USER` y `-A DOCKER-USER -j RETURN` | Docker usa el backend **nftables** (entonces `DOCKER-USER` no se consulta y el firewall de este plan **no protege**), no existe `DOCKER-USER`, o ya hay reglas ajenas o cadenas `CW-` |
+| 4 | `sudo -l` | jose puede usar `sudo` con contraseña (`(ALL : ALL) ALL`) y **no** hay ninguna línea `NOPASSWD` que no reconozcas | jose no tiene `sudo`, o hay `NOPASSWD: ALL` u otras reglas sin explicar |
+| 5 | `id; getent group docker` | jose pertenece al grupo `docker` (`deploy.sh` usa Docker sin `sudo`) | jose no está en `docker` |
+| 6 | `free -m; swapon --show; df -h / /var /opt` | ≥ 2.000 MiB de `available`, sin swap (S1 la crea), ≥ 10 GB libres | menos RAM disponible o menos de 10 GB libres |
+| 7 | `docker ps --format '{{.Names}}\t{{.Status}}'; docker stats --no-stream` | contenedores de Rotten Odds (`caddy`, `api`, `db`) `Up` y `healthy`, sin reinicios recientes, memoria como en el §7 | alguno `unhealthy`, `Restarting` o muy por encima de su uso normal: **no se toca un servidor enfermo** |
+| 8 | `curl -fsS -o /dev/null -w '%{http_code}\n' https://rottenodds-api.josemariamerchan.dev/health` | `200` | otro código (es la referencia con la que compararás tras cada paso) |
+| 9 | La copia de Rotten Odds: `systemctl list-timers --all \| grep -iE 'rotten\|backup'` y el listado de su carpeta de copias (ruta y unidad: su `DEPLOY.md`) | hay un timer y una copia de **menos de 26 h** | no hay copia reciente de Rotten Odds (R1 exige que la local esté hecha) |
+| 10 | `sudo sshd -T \| grep -Ei 'allowusers\|allowgroups\|permitrootlogin\|passwordauthentication\|kbdinteractive\|pubkeyauthentication\|maxauthtries'` | root no, contraseña no, clave sí; si ya hay `allowusers`, incluye a `jose` | `allowusers` sin `jose` (quedarías fuera); si hay `allowusers`/`allowgroups`, **S2 debe añadir también `cwbackup`** |
+| 11 | `docker network ls --format '{{.Name}}'; docker network ls -q \| xargs docker network inspect --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}'` | ninguna red `controlweb_*` y ninguna subred que empiece por `10.77.` | una subred solapa con `10.77.0.0/16` |
+| 12 | `ls -ld /opt/controlweb /opt/caddy-sites ~/controlweb /usr/local/lib/controlweb /etc/controlweb 2>&1; getent passwd cwbackup; systemctl list-units 'controlweb-*' --all --no-legend` | «No such file or directory» en todo, `cwbackup` no existe, ninguna unit | existe algo: léelo antes de seguir (puede ser un intento anterior) |
+| 13 | `ip -4 -br addr show scope global` | **tu `<IP_PUBLICA_VPS>` está directamente en una interfaz** (Hetzner Cloud: sí) | la IP pública no está en una interfaz (NAT, IP flotante): `ctorigdst` del hairpin no coincidiría; hay que repensar el firewall |
+| 14 | `resolvectl status \| grep -iE 'DNS Servers\|Current DNS'` | resolutores públicos (p. ej. `185.12.64.x`) | resolutores en dirección privada (10.x, 172.16-31.x, 192.168.x): se pondrán en `ALLOW_DNS` (S4); anótalos |
+| 15 | `systemctl is-active docker; systemctl cat docker.service \| head -3; ls /etc/systemd/system/docker.service.d 2>&1` | `active`; sin drop-ins que reordenen Docker | un drop-in de Docker con dependencias que no conoces |
+
+*Otras comprobaciones (fuera del servidor):*
+
+| # | Qué | Esperado | PARA si |
+|---|---|---|---|
+| 16 | **Panel de Hetzner → servidor → Backups** | **Actívalas ya** (+20 %, ≈ 1,33 €/mes). La primera copia puede tardar hasta un día en aparecer y R1 exige que exista | no puedes activarlas: R1 no se hace |
+| 17 | PC: `git status` limpio, en `main`, `git log origin/main..` vacío, y el CI de ese commit **en verde** en GitHub (yo no puedo verlo) | todo limpio y verde | CI en rojo o cambios sin subir |
+| 18 | PC: `ssh -o BatchMode=yes HOST true; echo $LASTEXITCODE` y `docker info` | `0` y Docker Desktop en marcha | no entra por clave sin contraseña |
+| 19 | PC: `.\mvnw.cmd verify` (≈ 20 min) | `BUILD SUCCESS` | cualquier fallo |
+| 20 | Anota el valor de `<IP_PUBLICA_VPS>`, el origen exacto de tu portfolio (para CORS, p. ej. `https://josemariamerchan.dev`) y tu email de administrador | los tres anotados fuera de este repositorio | — |
+
+## Guía de ejecución
+
+**S0 — hecho (solo lectura).** Desde el VPS, con `curl -4` y `User-Agent: ControlWeb/1.0`, `josemariamerchan.dev`, `rottenodds.josemariamerchan.dev` y
+`rottenodds-api.josemariamerchan.dev/health` respondieron **200 y sin `cf-mitigated`**: **C4 se omite por ahora**. Se reconfirma en S8 con los primeros checks reales
+(el cliente HTTP de Java tiene otra huella TLS que `curl`). Explicación: §12.
+
+### Fase B: el servidor, sin tocar Rotten Odds
+
+**S1 — Swap de 2 GiB (SRV).** Red de seguridad para `apt`, `docker load` y `pg_dump` y para que el OOM killer no elija la API de Rotten Odds (§7).
+
+```bash
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-controlweb-swap.conf && sudo sysctl -p /etc/sysctl.d/99-controlweb-swap.conf
+swapon --show; free -m; sudo findmnt --verify          # 2G de swap, sin errores en fstab
+```
+
+Deshacer: `sudo swapoff /swapfile; sudo sed -i '\#^/swapfile #d' /etc/fstab; sudo rm /swapfile /etc/sysctl.d/99-controlweb-swap.conf`.
+
+**S2 — SSH (opcional pero recomendado) (SRV).** El endurecimiento base ya existe en `00-hardening.conf` (`PermitRootLogin no`, sin contraseñas). El drop-in nuevo **solo añade**
+`AllowUsers` y `MaxAuthTries`. **Incluye `cwbackup`** aunque la cuenta aún no exista: la clave restringida de descarga (S6) entra con esa cuenta y `AllowUsers jose` la bloquearía.
+
+```bash
+printf 'AllowUsers jose cwbackup\nMaxAuthTries 3\n' | sudo tee /etc/ssh/sshd_config.d/10-controlweb.conf
+sudo sshd -t && sudo systemctl reload ssh          # con la sesión actual ABIERTA; abre una segunda sesión y comprueba que entras
+sudo sshd -T | grep -Ei 'allowusers|maxauthtries|passwordauthentication|permitrootlogin|kbdinteractive|pubkeyauth'
+```
+
+No se restringe el puerto 22 por IP. Deshacer: `sudo rm /etc/ssh/sshd_config.d/10-controlweb.conf && sudo systemctl reload ssh`.
+
+**S3 — Deploy key, carpetas y secretos (SRV).** El servidor clona el repositorio solo para los ficheros de `deploy/`, con una clave **de solo lectura** y un alias propio (sin tocar el bloque de Rotten Odds).
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/controlweb_deploy -N '' -C 'controlweb-deploy-key'
+cat >> ~/.ssh/config <<'EOF'
+
+Host github-controlweb
+  HostName github.com
+  User git
+  IdentityFile ~/.ssh/controlweb_deploy
+  IdentitiesOnly yes
+EOF
+chmod 600 ~/.ssh/config
+cat ~/.ssh/controlweb_deploy.pub        # → GitHub: repo → Settings → Deploy keys → Add deploy key, SIN «Allow write access»
+git clone git@github-controlweb:josemerchan712/controlweb.git ~/controlweb      # compara la huella que muestra con la que publica GitHub
+```
+
+Carpetas y `.env.prod` (los valores secretos se **generan aquí** y nunca salen por pantalla ni por el historial; solo los valores que tú aportas van en el comando):
+
+```bash
+sudo install -d -o root -g jose -m 750 /opt/controlweb
+sudo install -d -o root -g root -m 755 /opt/caddy-sites
+sudo install -o root -g jose -m 640 /dev/null /opt/controlweb/.env.prod
+{
+  echo "DB_USERNAME=controlweb"
+  echo "DB_PASSWORD=$(openssl rand -hex 24)"
+  echo "JWT_SECRET=$(openssl rand -base64 32)"
+  echo "ADMIN_EMAIL=<tu email>"
+  echo "ADMIN_PASSWORD=$(openssl rand -hex 16)"
+  echo "TRUSTED_PROXY_ADDRESSES=10.77.0.10"
+  echo "PUBLIC_CORS_ALLOWED_ORIGINS=<origen exacto del portfolio, p. ej. https://josemariamerchan.dev>"
+  echo "CORS_ALLOWED_ORIGINS="
+  echo "TELEGRAM_BOT_TOKEN="
+  echo "TELEGRAM_CHAT_ID="
+  echo "HEARTBEAT_URL="
+} | sudo tee /opt/controlweb/.env.prod > /dev/null
+sudo grep -c . /opt/controlweb/.env.prod; sudo stat -c '%U:%G %a' /opt/controlweb /opt/controlweb/.env.prod     # 11 líneas; root:jose 750 y root:jose 640
+sudo grep ADMIN_PASSWORD /opt/controlweb/.env.prod       # lee la contraseña UNA vez y guárdala en tu gestor de contraseñas
+```
+
+Telegram (bot nuevo de producción, mismo chat; envíale `/start` antes de la primera prueba) y `HEARTBEAT_URL` se rellenan en S8 con `sudoedit /opt/controlweb/.env.prod`
+(el editor no deja los valores en el historial). El perfil `prod` se niega a arrancar con valores vacíos o de ejemplo, sin `TRUSTED_PROXY_ADDRESSES` o sin `PUBLIC_CORS_ALLOWED_ORIGINS`.
+Deshacer: borrar `/opt/controlweb`, `~/controlweb`, el bloque del `config` y la deploy key en GitHub.
+
+**S4 — Red compartida y firewall de salida (SRV).** El firewall se instala **antes** del primer despliegue; mientras la red `controlweb_egress` no exista, sus reglas no coinciden con nada. Detalle y diseño: §10 y «Implementación de C7c-1».
+
+```bash
+docker network create --driver bridge --internal --subnet 10.77.0.0/24 --opt com.docker.network.bridge.name=cw-proxy controlweb_proxy
+cd ~/controlweb && git log -1 --stat && less deploy/firewall/controlweb-firewall.sh      # revisa lo que vas a instalar como root
+sudo deploy/firewall/install.sh
+printf 'PUBLIC_IP=<IP_PUBLICA_VPS>\n' | sudo tee /etc/controlweb/firewall.conf > /dev/null && sudo chmod 644 /etc/controlweb/firewall.conf
+#   si la comprobación 14 mostró resolutores privados, añade una línea:  ALLOW_DNS=<ip> <ip>
+sudo iptables-save | sed 's/\[[0-9]*:[0-9]*\]//' | grep -v '^#' > /tmp/fw-antes.txt
+sudo systemctl start controlweb-firewall.service
+sudo iptables-save | sed 's/\[[0-9]*:[0-9]*\]//' | grep -v '^#' > /tmp/fw-con.txt
+diff /tmp/fw-antes.txt /tmp/fw-con.txt                  # SOLO líneas «>» con CW-DENY, CW-EGRESS, CW-INPUT, sus reglas y 2 saltos «-i cw-egress»
+sudo systemctl stop controlweb-firewall.service
+sudo iptables-save | sed 's/\[[0-9]*:[0-9]*\]//' | grep -v '^#' | diff /tmp/fw-antes.txt -       # sin diferencias: es reversible
+sudo systemctl enable --now controlweb-firewall.service && sudo systemctl enable --now controlweb-firewall-guard.service
+systemctl is-active controlweb-firewall.service         # active
+curl -fsS -o /dev/null -w '%{http_code}\n' https://rottenodds-api.josemariamerchan.dev/health      # 200: Rotten Odds sigue igual
+```
+
+⏸ **PARA si** el `diff` muestra cualquier línea que no sea nuestra, si `stop` no deja todo como estaba, o si Rotten Odds deja de responder (`sudo systemctl disable --now controlweb-firewall.service controlweb-firewall-guard.service`).
+Deshacer: esa misma orden y `docker network rm controlweb_proxy`.
+
+**S5 — Primer despliegue interno (PC, luego SRV).** Caddy aún no enruta nada. La copia previa se omite solo ahora (no hay versión anterior). **Este es el día 1 de S10: apunta la fecha.**
+
+```powershell
+# PC — antes: push de main y CI en verde
+.\deploy\release.ps1 -SshTarget HOST -DryRun            # lista los pasos sin hacer nada
+.\deploy\release.ps1 -SshTarget HOST -CiChecked         # construye, verifica la imagen, la sube como fichero y despliega
+```
+
+```bash
+# SRV — comprobaciones (CW_APP = el contenedor de la aplicación; Compose le pone un nombre propio)
+CW_APP=$(docker ps -q --filter label=com.docker.compose.project=controlweb --filter label=com.docker.compose.service=controlweb-app)
+~/controlweb/deploy/deploy.sh status
+docker inspect --format '{{.State.Health.Status}} {{.State.OOMKilled}} {{.RestartCount}}' $CW_APP       # healthy false 0
+docker exec $CW_APP wget -q -O - http://127.0.0.1:8080/actuator/health                                  # {"status":"UP"}
+~/controlweb/deploy/verify-container.sh $CW_APP                                                          # todo «ok»
+docker stats --no-stream; docker logs --tail 40 $CW_APP
+docker exec $CW_APP sh -c 'nslookup controlweb-db; nslookup api; nslookup caddy'                          # solo controlweb-db resuelve
+```
+
+La tabla del §10, **desde la aplicación** (`docker exec $CW_APP sh -c '…'`): `wget -T5 -q -O /dev/null https://example.com` y `nslookup example.com` → OK; `wget -T5 -q -O /dev/null https://rottenodds-api.josemariamerchan.dev/health` → 200 (hairpin); `nc -zw3 controlweb-db 5432` → OK;
+`wget -T3 http://169.254.169.254/` → rechazado al instante; `nc -zw3 172.18.0.2 443` y `nc -zw3 172.28.0.10 443` → rechazados; `nc -zw3 10.77.2.1 22` y `nc -zw3 <IP_PUBLICA_VPS> 22` → rechazados; y
+`sudo iptables -L CW-EGRESS -vn --line-numbers` con contadores que suben en las reglas 2 (hairpin) y 4 (rangos privados). Si el hairpin (Docker 29 y el DNAT entre bridges) no funciona, plan B del §10.
+
+⏸ **PARA** si la aplicación no llega a `healthy`, si algún rechazo esperado no se produce, o si Rotten Odds cambia. Deshacer: `docker compose -p controlweb -f ~/controlweb/compose.prod.yml --env-file /opt/controlweb/.env.prod down` (los datos quedan en el volumen).
+
+**S6 — Copias de seguridad y descarga al PC.** Hasta que termine S6 solo ha podido funcionar el primer despliegue (no pide copia): **a partir de aquí `deploy.sh` exige la copia previa**. Diseño y motivos: §9, «C7b-1», «C7b-2», «C7b-3».
+
+*6.1 — PC: claves age (la privada solo en tu PC).*
+
+```powershell
+winget install FiloSottile.age                                                  # sin ser administrador; cierra y abre PowerShell
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.controlweb" | Out-Null
+age-keygen -o "$env:USERPROFILE\.controlweb\backup-identity.txt"                # NUNCA con «>» en PowerShell 5.1 (escribe UTF-16)
+icacls "$env:USERPROFILE\.controlweb" /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F"
+$public = (age-keygen -y "$env:USERPROFILE\.controlweb\backup-identity.txt")
+[System.IO.File]::WriteAllText("$env:USERPROFILE\.controlweb\backup-recipient.txt", $public + "`n", (New-Object System.Text.UTF8Encoding($false)))
+scp "$env:USERPROFILE\.controlweb\backup-recipient.txt" HOST:                  # la PÚBLICA
+```
+
+**Antes de seguir, guarda la privada** (`backup-identity.txt`) en **dos sitios independientes más**: una nota segura de tu gestor de contraseñas y papel o USB fuera de casa. Sin ella no se puede descifrar ninguna copia (detalle en «Implementación de C7b-3», punto 1).
+
+*6.2 — SRV: scripts de copia, units, regla de sudoers.*
+
+```bash
+sudo apt install age
+sudo install -d -o root -g root -m 755 /etc/controlweb
+sudo install -o root -g root -m 644 ~/backup-recipient.txt /etc/controlweb/backup-recipient.txt && rm ~/backup-recipient.txt
+grep -c AGE-SECRET-KEY /etc/controlweb/backup-recipient.txt                     # 0
+cd ~/controlweb && git log -1 --stat && less deploy/backup/install.sh deploy/backup/controlweb-backup.sudoers
+sudo deploy/backup/install.sh          # scripts en /usr/local/lib/controlweb, units de systemd, regla de sudoers (validada con visudo); NO activa los timers
+sudo visudo -c                          # «parsed OK»
+sudo -l                                 # debe añadir: (root) NOPASSWD: /usr/bin/systemctl start controlweb-backup.service
+stat -c '%U:%G %a %n' /usr/local/lib/controlweb /usr/local/lib/controlweb/* /var/backups/controlweb /var/lib/controlweb-backup /etc/controlweb /etc/controlweb/backup-recipient.txt
+sudo -u jose test -w /usr/local/lib/controlweb/backup.sh && echo "MAL: jose puede editarlo" || echo "bien: jose no puede editarlo"
+```
+
+*6.3 — SRV: primera copia y prueba de restauración a mano, y luego los timers.*
+
+```bash
+sudo systemctl start controlweb-backup.service && cat /var/lib/controlweb-backup/last       # fecha, nombre y tamaño
+sudo ls -l /var/backups/controlweb                                                          # un .dump.age, modo 600, dueño root
+sudo systemctl start controlweb-restore-test.service; journalctl -u controlweb-restore-test.service -n 30 --no-pager      # termina bien y borra la base temporal
+sudo systemctl enable --now controlweb-backup.timer controlweb-restore-test.timer
+systemctl list-timers 'controlweb-*'                                                        # 04:15 UTC diario y domingos 05:00 UTC
+sudo -n systemctl restart controlweb-backup.service; sudo -n /usr/local/lib/controlweb/backup.sh        # ambas deben pedir contraseña: la regla es UNA orden exacta
+```
+
+*6.4 — PC y SRV: la clave SSH restringida de descarga.*
+
+```powershell
+# PC
+ssh-keygen -t ed25519 -f "$env:USERPROFILE\.ssh\controlweb_backup_ed25519" -N '""' -C "controlweb-backup-download"
+icacls "$env:USERPROFILE\.ssh\controlweb_backup_ed25519" /inheritance:r /grant:r "${env:USERNAME}:R"
+scp "$env:USERPROFILE\.ssh\controlweb_backup_ed25519.pub" HOST:
+```
+
+```bash
+# SRV (antes: sudo sshd -T | grep -i allowusers  debe incluir cwbackup, ver S2)
+cd ~/controlweb && less deploy/backup/serve-backup.sh deploy/backup/install-reader.sh
+sudo deploy/backup/install-reader.sh --pubkey ~/controlweb_backup_ed25519.pub          # opcional: --from <tu IP>
+rm ~/controlweb_backup_ed25519.pub
+sudo cat /var/lib/cwbackup/.ssh/authorized_keys        # restrict,command="sudo -n /usr/local/lib/controlweb/serve-backup.sh" ssh-ed25519 …
+sudo -l -U cwbackup                                    # solo: (root) NOPASSWD: /usr/local/lib/controlweb/serve-backup.sh
+```
+
+```powershell
+# PC — primero comprueba que la clave NO da shell ni ejecuta nada, y luego descarga
+cmd /c 'ssh -i "%USERPROFILE%\.ssh\controlweb_backup_ed25519" cwbackup@HOST id < NUL'          # «refused: empty request» (el «<» lo interpreta cmd, no PowerShell)
+[Environment]::SetEnvironmentVariable('CONTROLWEB_BACKUP_SSH', 'cwbackup@HOST', 'User')  # reabre PowerShell
+.\deploy\backup\download-backups.ps1 -List
+.\deploy\backup\download-backups.ps1                                                     # sin «checksum mismatch»
+.\deploy\backup\download-backups.ps1 -VerifyRestore -Identity "$env:USERPROFILE\.controlweb\backup-identity.txt"      # «RESTORE OK»
+.\deploy\backup\download-backups.ps1 -InstallTask -TaskTime 10:00
+.\deploy\backup\download-backups.ps1 -Status
+```
+
+*6.5 — Panel de Hetzner:* comprueba que **Backups está activo y que ya existe la primera copia** (se activó en la comprobación 16). Si todavía no existe, espera: R1 no puede empezar.
+
+⏸ **PARA** si la primera copia o la restauración fallan, si `RESTORE OK` no sale en tu PC (la prueba que el servidor no puede hacer), si la regla de sudoers permite algo más de lo indicado, o si la clave de descarga da un shell.
+Qué hacer si falla la restauración real en el servidor: «Restaurar (incidencia)» en C7b-1. Deshacer: `sudo systemctl disable --now controlweb-backup.timer controlweb-restore-test.timer`, borrar `/etc/sudoers.d/controlweb-backup` y `/etc/sudoers.d/controlweb-reader`, `sudo userdel cwbackup` y `-RemoveTask` en el PC.
+
+### Fase C: único cambio en Rotten Odds
+
+**R1 [RO] — Requisitos previos (todos):** (1) existen `controlweb_proxy` (`docker network inspect controlweb_proxy`) y `/opt/caddy-sites` vacía (`ls -ld /opt/caddy-sites; ls /opt/caddy-sites`); (2) **existe la primera copia de Hetzner** del servidor
+(panel de Hetzner → Backups) — la comprobación 16 y 6.5; (3) la copia local de Rotten Odds está hecha (comprobación 9); (4) S6 terminó (hay copia cifrada de ControlWeb y la descarga funciona); (5) el firewall está activo.
+
+Cambio en **un PR** del repositorio de Rotten Odds (sin tocar nada más de ese repo):
+
+```caddy
+# al final de su Caddyfile
+# Sitios de otros proyectos de este servidor (fragmentos fuera del repo). Si no hay ninguno, Caddy solo avisa.
+import /etc/caddy/sites/*.caddy
+```
+
+```yaml
+# en su docker-compose.prod.yml, servicio caddy: AÑADIR (sin quitar nada de lo que ya tiene)
+services:
+  caddy:
+    volumes:
+      - /opt/caddy-sites:/etc/caddy/sites:ro
+    networks:
+      controlweb_proxy:
+        ipv4_address: 10.77.0.10
+networks:
+  controlweb_proxy:
+    external: true
+```
+
+Más una nota en su `DEPLOY.md` («Rotten Odds depende de la red externa `controlweb_proxy`; no la borres sin revertir este cambio»). **Antes de fusionar**, valida las dos cosas en tu PC o en el servidor sin tocar nada vivo: `docker compose -f docker-compose.prod.yml config -q` y un `caddy validate` en un contenedor desechable
+de la imagen que usa su Caddy (`docker run --rm --network none -v <su Caddyfile>:/etc/caddy/Caddyfile:ro -v /opt/caddy-sites:/etc/caddy/sites:ro <su imagen> caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile`).
+Se despliega con su `deploy.sh` en **horas tranquilas**: recrear Caddy corta ~2–5 s.
+
+Comprobar justo después: `curl -fsS https://rottenodds-api.josemariamerchan.dev/health` (200); `docker exec <caddy> ip route` (la ruta por defecto **no ha cambiado**: `controlweb_proxy` es `internal`); `docker exec <caddy> nslookup api` (sigue resolviendo a Rotten Odds) y
+`docker exec <caddy> nslookup controlweb-app` (resuelve a 10.77.0.20). Deshacer: `deploy.sh rollback` de Rotten Odds **y** `git revert` del PR.
+
+⏸ **PARA 24 horas observando Rotten Odds** (health, logs de Caddy, certificados) antes de seguir. Motivos y riesgos: §4 y §14.
+
+### Fase D: exposición
+
+**S7 [CF + SRV] — DNS y fragmento de Caddy.** Cloudflare: registro **A** `status-api` → `<IP_PUBLICA_VPS>` en **DNS only** (nube gris). Después, en el servidor:
+
+```bash
+cd ~/controlweb && git log -1 --stat && less deploy/caddy/controlweb.caddy deploy/caddy/caddy-install.sh
+sudo deploy/caddy/caddy-install.sh --check          # solo valida (misma imagen que el Caddy que corre); no cambia nada
+sudo deploy/caddy/caddy-install.sh                  # valida, mueve de forma atómica y recarga sin corte; si algo falla, /opt/caddy-sites queda igual
+curl -sI https://status-api.josemariamerchan.dev/actuator/health       # 200, con Strict-Transport-Security y sin cabecera Server
+curl -s -o /dev/null -w '%{http_code}\n' https://status-api.josemariamerchan.dev/swagger-ui.html      # 404
+echo | openssl s_client -connect status-api.josemariamerchan.dev:443 -servername status-api.josemariamerchan.dev 2>/dev/null | openssl x509 -noout -issuer -dates
+curl -fsS -o /dev/null -w '%{http_code}\n' https://rottenodds-api.josemariamerchan.dev/health         # 200: Rotten Odds intacto
+```
+
+El certificado puede tardar unos segundos en emitirse la primera vez. Deshacer: `sudo rm /opt/caddy-sites/controlweb.caddy && docker exec <caddy> caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile` (o devolver `.controlweb.caddy.previous`). Detalle: «Implementación de C7c-2».
+
+**S8 — Altas, avisos y reconfirmación de Cloudflare.** (1) Rellena Telegram y el heartbeat y reinicia solo la aplicación:
+
+```bash
+sudoedit /opt/controlweb/.env.prod       # TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, HEARTBEAT_URL (https, de healthchecks.io: periodo 1 min, gracia 3–5 min)
+docker compose -p controlweb -f ~/controlweb/compose.prod.yml --env-file /opt/controlweb/.env.prod up -d controlweb-app
+```
+
+(2) Desde tu PC, login y alta de los tres sitios (ejemplos de `Invoke-RestMethod` en el `README.md`, «Ejemplos de uso», cambiando la URL base por `https://status-api.josemariamerchan.dev`): portfolio y casino cada 300 s; `rottenodds-api…/health` cada 60 s (umbral DOWN 2) — §12.
+(3) `POST /api/alerts/test` → llega el aviso a Telegram. (4) **Reconfirmación de S0:** `GET /api/status` debe mostrar `lastCheck.statusCode` 200 en los tres sitios; si Cloudflare devuelve 403 al cliente de Java, se retoma C4 (mensaje «desafío de Cloudflare») y la regla WAF con `Skip` (§12).
+(5) healthchecks.io debe marcar el check como «up» a los pocos minutos.
+
+**S9 ⏸ — Batería final (todo debe cumplirse antes de dar la fase por terminada).**
+
+```bash
+U=https://status-api.josemariamerchan.dev
+curl -s -o /dev/null -w '%{http_code}\n' $U/v3/api-docs                      # 404 (igual /swagger-ui.html y /actuator/env)
+for i in 1 2 3 4 5 6; do curl -s -o /dev/null -w '%{http_code} ' -X POST $U/api/auth/login -H 'Content-Type: application/json' -d '{"email":"x@example.com","password":"contrasena-incorrecta-1"}'; done; echo   # 401 401 401 401 401 429
+curl -s -D - -o /dev/null -X POST $U/api/auth/login -H 'X-Forwarded-For: 1.2.3.4' -H 'Content-Type: application/json' -d '{"email":"x@example.com","password":"otra-incorrecta-2"}' | grep -iE '^HTTP|retry-after'    # sigue el 429 con Retry-After
+curl -s -D - -o /dev/null -H 'Origin: https://josemariamerchan.dev' $U/api/public/status | grep -iE '^HTTP|access-control'       # permitido (ajusta el origen)
+curl -s -D - -o /dev/null -H 'Origin: https://otro.example.com' $U/api/public/status | grep -ic 'access-control-allow-origin'   # 0
+curl -s -D - -o /dev/null -H 'Origin: https://josemariamerchan.dev' $U/api/sites | grep -ic 'access-control-allow-origin'        # 0 (y 401)
+```
+
+Además: **(a)** guardián del firewall — `sudo systemctl stop controlweb-firewall.service` debe **parar la aplicación** (`docker ps` ya no la lista; Rotten Odds sigue en pie); luego `sudo systemctl start controlweb-firewall.service && docker compose -p controlweb -f ~/controlweb/compose.prod.yml --env-file /opt/controlweb/.env.prod start controlweb-app`;
+**(b)** `sudo reboot` (en hora tranquila) → tras volver: `systemctl is-active controlweb-firewall.service controlweb-firewall-guard.service`, `journalctl -u controlweb-firewall-guard.service -b` («the firewall is active»), todo `healthy`, y el health de Rotten Odds 200;
+**(c)** imagen rota a propósito: un commit de prueba en `main` que impida arrancar (p. ej. quitar una propiedad obligatoria de `application-prod.yml`), `release.ps1` y comprobar el **rollback automático**; revertir el commit; **(d)** `deploy.sh rollback` manual; **(e)** `sudo systemctl start controlweb-restore-test.service` y `.\deploy\backup\download-backups.ps1 -VerifyRestore …` en el PC.
+
+**S10 ⏸ — Una semana después: la curva de memoria y la revisión.** La medición de C6 solo duró 10 minutos y el RSS seguía creciendo: toma **tres lecturas, el día 1 (S5), el 3 y el 7**, y apunta la fecha de cada una para ver la pendiente, no solo el valor final.
+
+```bash
+CW_APP=$(docker ps -q --filter label=com.docker.compose.project=controlweb --filter label=com.docker.compose.service=controlweb-app)
+docker exec $CW_APP cat /sys/fs/cgroup/memory.peak                                 # bytes; umbral 440 MiB = 461.373.440
+docker exec $CW_APP sh -c "awk '/^VmHWM/ {print \$2}' /proc/1/status"             # kB
+docker stats --no-stream
+docker inspect --format '{{.State.OOMKilled}} {{.RestartCount}}' $CW_APP
+```
+
+**Regla:** si `memory.peak` supera 440 MiB, o hay un solo `OOMKilled` o reinicio, se sube el límite del contenedor a **640 MiB** sin tocar `-Xmx` (§7, «Medición de memoria»).
+Además: swap usado (~0, `free -m`), tamaño de las copias y de la tabla `checks`, **siete copias verificadas** (y las del PC: `-Status`), contadores de `CW-DENY` (`sudo iptables -L CW-DENY -vn`) y falsos positivos en `sudo journalctl -k | grep CW-DENY`, heartbeat, caducidad del certificado,
+health de Rotten Odds, número de 429, log de la retención de las 04:45 UTC (`docker logs $CW_APP | grep -i retention`) y la PR de Dependabot.
+
+*Recordatorio automático en tu PC* (tres avisos con ventana: día 1, 3 y 7 a las 09:00; pon la fecha del día 1 = el día de S5):
+
+```powershell
+$start = Get-Date '2026-10-12 09:00'        # ← CAMBIA por la fecha de S5
+foreach ($day in 1, 3, 7) {
+    $text = "ControlWeb S10: lectura de memoria del dia $day (docs/DESPLIEGUE.md, S10)"
+    $cmd  = "Add-Type -AssemblyName PresentationFramework; [void][System.Windows.MessageBox]::Show('$text','ControlWeb')"
+    $enc  = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+    $action  = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -WindowStyle Hidden -EncodedCommand $enc"
+    $trigger = New-ScheduledTaskTrigger -Once -At $start.AddDays($day - 1)
+    Register-ScheduledTask -TaskName "ControlWeb S10 dia $day" -Action $action -Trigger $trigger -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable) -Force | Out-Null
+}
+Get-ScheduledTask -TaskName 'ControlWeb S10*' | Get-ScheduledTaskInfo | Format-Table TaskName, NextRunTime
+# al terminar:  Unregister-ScheduledTask -TaskName 'ControlWeb S10*' -Confirm:$false
+```
+
+*Digest de ShellCheck (cuando quieras actualizarlo; es una decisión, no una sorpresa).*
+
+```powershell
+docker buildx imagetools inspect koalaman/shellcheck:stable                   # copia la línea «Digest: sha256:…» (la del índice, no las de cada plataforma)
+docker run --rm koalaman/shellcheck@sha256:<NUEVO> --version                  # mira la versión
+$files = git ls-files '*.sh'
+docker run --rm -v "${PWD}:/mnt" -w /mnt koalaman/shellcheck@sha256:<NUEVO> --source-path=SCRIPTDIR --external-sources @files     # arregla o justifica (con motivo) lo que salga
+$ci = '.github\workflows\ci.yml'
+$text = [System.IO.File]::ReadAllText((Resolve-Path $ci)) -replace 'koalaman/shellcheck@sha256:[0-9a-f]{64}', 'koalaman/shellcheck@sha256:<NUEVO>'
+[System.IO.File]::WriteAllText((Resolve-Path $ci), $text, (New-Object System.Text.UTF8Encoding($false)))
+# actualiza a mano en el comentario del job la versión y la fecha, y luego:
+.\mvnw.cmd verify -Pfast        # ShellcheckGuardianTest y CiWorkflowTest; antes del commit, el verify completo
+```
+
+---
+
+# Parte II: diseño y referencia
 
 ## Cambios acordados al aprobar el plan
 
@@ -19,9 +406,9 @@
    Así S5 no depende de S6 y, después de S6, ningún despliegue puede saltarse la copia.
 3. **Rate limiting:** se corrige una afirmación del borrador. Ver [Limitación conocida](#limitación-conocida-bloqueo-de-la-cuenta-por-muchas-ips).
 4. **SSH (S2):** ya existe `/etc/ssh/sshd_config.d/00-hardening.conf` (`PermitRootLogin no`, `PasswordAuthentication no`,
-   `KbdInteractiveAuthentication no`, `PubkeyAuthentication yes`). El drop-in nuevo **solo añade** `AllowUsers jose` y
-   `MaxAuthTries 3`, y se verifica con `sshd -T`.
-5. **R1 requiere** haber comprobado antes que existe la **primera copia de Hetzner** (ver S-R1).
+   `KbdInteractiveAuthentication no`, `PubkeyAuthentication yes`). El drop-in nuevo **solo añade** `AllowUsers jose cwbackup` y
+   `MaxAuthTries 3` (la cuenta `cwbackup` es la de la descarga de copias, S6), y se verifica con `sshd -T`.
+5. **R1 requiere** haber comprobado antes que existe la **primera copia de Hetzner** (ver R1).
 
 ## Resumen de decisiones
 
@@ -34,6 +421,12 @@
 | Memoria | Swap de 2 GiB (swappiness 10) y límites por contenedor | Red de seguridad, no capacidad |
 | Copia fuera del servidor | Backups de Hetzner + copia diaria cifrada con `age` que descarga el PC | Las dos sin tarjeta nueva |
 | Aviso externo | Heartbeat a healthchecks.io (+ Worker de Cloudflare opcional) | Gratis, sin tarjeta, detecta servidor y scheduler parados |
+| Cifrado de copias | `age` con clave pública en el servidor; la privada solo en el PC (+ gestor + papel/USB) | El servidor puede escribir copias pero no leerlas |
+| Descarga de copias | Cuenta `cwbackup` con una clave SSH restringida (`restrict,command=…`) que solo puede listar/leer copias cifradas | Sin shell, sin escritura, sin acceso a nada más |
+| Firewall de salida | Reglas solo para `-i cw-egress`; `Before=docker.service` sin dependencia fuerte; guardián que para solo la aplicación | Un fallo o un `stop` nunca para Docker ni Rotten Odds |
+| IP real en el login | `TRUSTED_PROXY_ADDRESSES=10.77.0.10` (Caddy); el perfil `prod` no arranca sin ella | Sin ella todos comparten la IP de Caddy |
+| Caddy | `deploy/caddy/caddy-install.sh` valida con la misma imagen, mueve atómico, recarga sin corte | Un fragmento roto + un reinicio tumbaría Rotten Odds |
+| Calidad | ShellCheck en el CI (imagen por digest); `-Pfast` opt-in para iterar | Los scripts corren como root en el VPS |
 
 ## 1. Rate limiting del login
 
@@ -127,7 +520,7 @@ En su Compose (servicio `caddy`): volumen `/opt/caddy-sites:/etc/caddy/sites:ro`
 `ipv4_address: 10.77.0.10`. Un glob sin coincidencias es un aviso, no un error (se comprueba con `caddy validate`).
 
 Riesgo: un fragmento roto en disco + un reinicio = Caddy no arranca y **cae Rotten Odds**. Por eso el fragmento solo se instala
-con `caddy-install.sh`, que valida con un contenedor desechable (misma imagen que el Caddy en marcha), mueve el fichero de
+con `deploy/caddy/caddy-install.sh`, que valida con un contenedor desechable (misma imagen que el Caddy en marcha), mueve el fichero de
 forma atómica y solo entonces hace `caddy reload` (sin corte).
 
 Fragmento de ControlWeb (`deploy/caddy/controlweb.caddy`, instalado como root, 644):
@@ -285,13 +678,13 @@ Telegram de producción: bot nuevo y el mismo chat (enviarle `/start` al bot nue
 
 ## 9. Copias de seguridad
 
-Scripts de root en `/usr/local/lib/controlweb/` (instalados con `sudo install`, **no editables por jose**; no se copia el patrón
+Scripts de root en `/usr/local/lib/controlweb/` (instalados con `sudo deploy/backup/install.sh`, **no editables por jose**; no se copia el patrón
 de Rotten Odds, cuyo servicio ejecuta como root un script en una ruta escribible por jose). Timers:
 `controlweb-backup.timer` 04:15 UTC y `controlweb-restore-test.timer` domingos 05:00 UTC.
 
 `pg_dump -Fc`, verificación con `pg_restore --list`, rotación de 14 días en `/var/backups/controlweb` (700) y
 **restauración real** semanal en una base temporal (`--exit-on-error`, comprobación de tablas, versión de Flyway y filas),
-que se borra después. Prueba manual trimestral desde la copia del PC en un Docker local.
+que se borra después. Prueba mensual desde la copia del PC en un Docker local (`download-backups.ps1 -VerifyRestore`).
 
 | Opción fuera del servidor | Tarjeta | Conclusión |
 |---|---|---|
@@ -300,14 +693,14 @@ que se borra después. Prueba manual trimestral desde la copia del PC en un Dock
 | Backblaze B2 | Las fuentes se contradicen | Descartado mientras no se confirme |
 | Cloudflare R2 | Pide medio de pago | Descartado |
 
-Descarga al PC: clave SSH dedicada con `restrict,command=…` (solo puede leer la última copia `.age`), tarea de Windows diaria
+Descarga al PC: cuenta `cwbackup` con clave SSH dedicada `restrict,command="sudo -n …/serve-backup.sh"` (solo puede ejecutar `list`, `sha256 NOMBRE` y `get NOMBRE` sobre ficheros `controlweb-*.dump.age`), tarea de Windows diaria
 con "ejecutar lo antes posible si se perdió" (con el PC apagado se pone al día al encenderlo; más de 14 días apagado deja un
 hueco que cubre Hetzner). En PowerShell 5.1 usar `cmd /c "ssh … > fichero"`.
 
 ## 10. Firewall de salida
 
 Script de root `/usr/local/sbin/controlweb-firewall` + `controlweb-firewall.service` (`Before=docker.service`,
-`WantedBy=multi-user.target`). Sin `iptables-persistent`. Todo cuelga de `-i cw-egress`, así que no afecta a Rotten Odds ni al
+`WantedBy=multi-user.target`) + `controlweb-firewall-guard.service` (ver «`Before=` frente a `Requires=`»). Sin `iptables-persistent`. Todo cuelga de `-i cw-egress`, así que no afecta a Rotten Odds ni al
 tráfico Caddy↔app (`cw-proxy`) ni app↔BD (`cw-db`).
 
 ```
@@ -400,10 +793,10 @@ sustituyen a S5. Quitarlo todo: `sudo systemctl disable --now controlweb-firewal
 | `Wants=` | Igual que `Before=` pero además arrastra el firewall al arrancar Docker | No aporta nada si ya está en `multi-user.target`. |
 
 **El guardián** (`controlweb-firewall-guard.service`, `After=docker.service controlweb-firewall.service`, no es dependencia de nada) ejecuta `controlweb-firewall guard`:
-si las reglas no están (comprobación real con `iptables -C`, no solo el estado de systemd), para **únicamente** el contenedor `controlweb-app` y solo si
-pertenece al proyecto de Compose `controlweb` (comprueba la etiqueta); no toca Docker, ni Rotten Odds, ni `compose`, ni borra nada; nunca hace fallar el arranque.
+si las reglas no están (comprobación real con `iptables -C`, no solo el estado de systemd), para **únicamente** el contenedor del servicio `controlweb-app` del proyecto de Compose `controlweb` (lo busca por sus **etiquetas de Compose**, porque Compose le da un nombre propio, `controlweb-controlweb-app-1`);
+no toca Docker, ni Rotten Odds, ni `compose`, ni borra nada; nunca hace fallar el arranque.
 El firewall lo invoca también en `ExecStopPost` (con `-`): si lo paras con la aplicación en marcha, la aplicación se para. Para volver a arrancarla, arregla el
-firewall y despliega (o `docker start controlweb-app`). Riesgo residual honesto: tras un reinicio con el firewall roto, hay una ventana de segundos entre que Docker
+firewall y despliega (o `docker compose -p controlweb -f ~/controlweb/compose.prod.yml --env-file /opt/controlweb/.env.prod start controlweb-app`). Riesgo residual honesto: tras un reinicio con el firewall roto, hay una ventana de segundos entre que Docker
 arranca la aplicación y el guardián la para. Si no la quieres, la alternativa es poner `restart: "no"` y arrancarla desde una unit con `Requires=controlweb-firewall.service`
 (más piezas y cambia C6): dímelo y lo preparo.
 
@@ -716,7 +1109,8 @@ tras cualquier incidencia.
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.controlweb" | Out-Null
 age-keygen -o "$env:USERPROFILE\.controlweb\backup-identity.txt"
 # 3. La clave PÚBLICA (la única que sube al servidor):
-age-keygen -y "$env:USERPROFILE\.controlweb\backup-identity.txt" | Out-File -Encoding ascii "$env:USERPROFILE\.controlweb\backup-recipient.txt"
+$public = (age-keygen -y "$env:USERPROFILE\.controlweb\backup-identity.txt")
+[System.IO.File]::WriteAllText("$env:USERPROFILE\.controlweb\backup-recipient.txt", $public + "`n", (New-Object System.Text.UTF8Encoding($false)))
 # 4. Solo tú puedes leer la privada:
 icacls "$env:USERPROFILE\.controlweb\backup-identity.txt" /inheritance:r /grant:r "$($env:USERNAME):(R)"
 ```
@@ -831,7 +1225,7 @@ Cuatro units y una regla, todo en `deploy/backup/` y todo instalado por `sudo de
 | `controlweb-backup.sudoers` | `/etc/sudoers.d/controlweb-backup` | root:root **0440** | una sola regla, ver abajo |
 
 Por qué esas horas: la copia de Rotten Odds sale sobre las 03:30 UTC (más hasta 10 min de retraso aleatorio) y la purga de checks de ControlWeb
-(`app.retention.cron`) a las 03:30; a las 04:15 ninguna de las dos está en marcha. La prueba semanal va 45 minutos después de la copia diaria.
+(`app.retention.cron`, en producción **04:45**) corre 30 minutos **después** de la copia, así que nunca coinciden. La prueba semanal va 45 minutos después de la copia diaria.
 Los dos servicios llevan límites de tiempo (20 y 30 min), prioridad baja de CPU y de disco (`Nice`, `IOSchedulingClass=idle`) para no molestar a
 Rotten Odds, y endurecimiento de systemd: `NoNewPrivileges`, `PrivateTmp`, `PrivateDevices`, `ProtectSystem=strict` (todo el sistema de ficheros
 en solo lectura salvo `ReadWritePaths=/var/backups/controlweb /var/lib/controlweb-backup /run`), `ProtectHome=yes` (no ven `/home`), y protección
@@ -1003,8 +1397,8 @@ Pruebas que **debes ver tú** (la restricción funciona de verdad; nada de esto 
 
 ```powershell
 .\deploy\backup\download-backups.ps1 -SshTarget cwbackup@HOST -List      # lista las copias
-ssh -i "$env:USERPROFILE\.ssh\controlweb_backup_ed25519" cwbackup@HOST id < NUL        # debe decir «refused: empty request»: NO ejecuta id, NO da shell
-ssh -i "$env:USERPROFILE\.ssh\controlweb_backup_ed25519" cwbackup@HOST "get ../../etc/passwd" < NUL   # «refused: empty request»: la orden de la línea se ignora
+cmd /c 'ssh -i "%USERPROFILE%\.ssh\controlweb_backup_ed25519" cwbackup@HOST id < NUL'        # debe decir «refused: empty request»: NO ejecuta id, NO da shell (el «<» lo interpreta cmd)
+cmd /c 'ssh -i "%USERPROFILE%\.ssh\controlweb_backup_ed25519" cwbackup@HOST "get ../../etc/passwd" < NUL'   # «refused: empty request»: la orden de la línea se ignora
 ```
 
 #### 3. Descargar
@@ -1108,59 +1502,26 @@ por eso la regla lleva `Defaults:cwbackup !use_pty` (sin terminal en este flujo 
   `HostSafetyDocumentationRangesTest` (extremos bloqueados, vecinas permitidas, también mapeados en IPv6 y con 4 mutaciones
   comprobadas). Las dos capas coinciden en estos rangos.
 
-### Fase B: servidor
+### Fases B, C y D: índice de la guía
 
-- **S0 [SRV, solo lectura] ✅ hecho:** desde el VPS, con `curl -4` y `User-Agent: ControlWeb/1.0`, `josemariamerchan.dev`,
-  `rottenodds.josemariamerchan.dev` y `rottenodds-api.josemariamerchan.dev/health` responden **200 y sin `cf-mitigated`**, por lo que
-  **C4 se omite por ahora**. **Se reconfirma en S8** con los primeros checks reales de ControlWeb: el cliente HTTP de Java tiene
-  otra huella TLS que `curl`, y Cloudflare podría tratarlo distinto. Si en S8 aparecen 403 de Cloudflare, se retoma C4 (mensaje
-  "desafío de Cloudflare") y la regla WAF personalizada con Skip (punto 12).
-- **S1 [SRV] Swap 2 GiB:** `fallocate`, `mkswap`, `swapon`, entrada en `/etc/fstab`, `vm.swappiness=10`. Comprobar con
-  `swapon --show; free -m; sudo findmnt --verify`. Deshacer: `swapoff`, borrar la línea de fstab y los ficheros.
-- **S2 [SRV] SSH (opcional):** el endurecimiento base ya existe en `00-hardening.conf`. El drop-in nuevo
-  (`/etc/ssh/sshd_config.d/10-controlweb.conf`) **solo añade** `AllowUsers jose` y `MaxAuthTries 3`. Aplicar con
-  `sudo sshd -t && sudo systemctl reload ssh` **con la sesión actual abierta**, entrar por una segunda sesión y verificar con
-  `sudo sshd -T | grep -Ei 'allowusers|maxauthtries|passwordauthentication|permitrootlogin|kbdinteractive|pubkeyauth'`.
-  No se restringe el puerto 22 por IP. Deshacer: borrar el drop-in y recargar.
-- **S3 [SRV] Deploy key, carpetas y secretos:** clave `~/.ssh/controlweb_deploy` (ed25519), bloque `Host github-controlweb` en
-  `~/.ssh/config` (sin pisar el de Rotten Odds), clave pública en GitHub → Deploy keys **sin escritura**, clon en
-  `~/controlweb`, `/opt/controlweb` (`root:jose`, 750), `/opt/caddy-sites` (755) y `.env.prod` (`root:jose`, 640) rellenado con
-  valores generados en el servidor con `openssl rand -base64 32` (nunca en el chat).
-- **S4 [SRV] Red compartida y firewall:** `docker network create --driver bridge --internal --subnet 10.77.0.0/24 --opt
-  com.docker.network.bridge.name=cw-proxy controlweb_proxy`; instalar el firewall con `sudo install` y
-  `sudo systemctl enable --now controlweb-firewall`. Comprobar `iptables -S DOCKER-USER/CW-EGRESS` y que Rotten Odds responde.
-  Deshacer: `systemctl disable --now controlweb-firewall` y `docker network rm controlweb_proxy`.
-- **S5 [SRV] Primer despliegue interno** con `release.ps1` (Caddy aún no enruta nada). La copia previa se omite (no hay
-  versión anterior). ⏸ Health interno, tabla del punto 10, `docker stats`, logs y `nslookup`.
-- **S6 [SRV] Copias:** scripts y timers, `age`, primera copia manual y `restore-test`, tarea en el PC y Backups de Hetzner
-  activados. ⏸ Descifrar una copia en el PC y restaurarla en un Docker local. A partir de aquí `deploy.sh` exige la copia previa.
+Los comandos finales, las comprobaciones y cómo deshacer cada paso están en la **Parte I (guía de ejecución)**, al principio de este documento. Este índice solo
+dice qué hay y en qué orden:
 
-### Fase C: único cambio en Rotten Odds
-
-- **R1 [RO]** — **Requisitos previos:** (1) existen `controlweb_proxy` y `/opt/caddy-sites` (vacía); (2) **se ha comprobado que
-  existe la primera copia de Hetzner** del servidor (panel de Hetzner → Backups); (3) la copia local de Rotten Odds está hecha.
-  Cambio en un PR: las 2 líneas del Caddyfile + volumen `/opt/caddy-sites` + red externa `controlweb_proxy` con
-  `ipv4_address: 10.77.0.10` + nota en su DEPLOY.md. Validar antes de fusionar con `caddy validate` en un contenedor desechable y
-  `docker compose config -q`. Provoca un corte de ~2–5 s al recrear caddy (en horas tranquilas). Comprobar el health de Rotten
-  Odds, `ip route` de Caddy (ruta por defecto sin cambios) y `nslookup api` / `nslookup controlweb-app` desde Caddy.
-  Deshacer: `deploy.sh rollback` **y** `git revert`. ⏸ 24 h observando Rotten Odds antes de seguir.
-
-### Fase D: exposición
-
-- **S7 [CF + SRV]:** registro A `status-api` → `<IP_PUBLICA_VPS>` en **DNS only**; `sudo caddy-install.sh`. Comprobar certificado
-  y cabeceras. Deshacer: borrar el fragmento y `caddy reload`.
-- **S8:** alta de los tres sitios y **reconfirmación de que Cloudflare no devuelve 403 a los checks de Java** (ver S0; si lo hace, C4 y regla WAF), heartbeat, Worker opcional y `POST /api/alerts/test`.
-- **S9 ⏸ Batería final:** health `UP`; Swagger, `/v3/api-docs` y `/actuator/env` → 404; 6 logins erróneos → 5×401 y luego 429 con
-  `Retry-After`; lo mismo cambiando `X-Forwarded-For` (sigue el 429); CORS de `/api/public/status` con el origen del portfolio
-  (permitido) y con otro (no); `/api/sites` sin cabecera CORS desde el portfolio; `sudo reboot` (todo vuelve solo, firewall
-  incluido); imagen rota a propósito (rollback automático); `deploy.sh rollback`; `restore-test`.
-- **S10 tras una semana:** **la curva de memoria** (la medición de C6 solo duró 10 minutos y el RSS seguía creciendo al terminar:
-  toma estas lecturas el día 1, el 3 y el 7 y apunta la fecha, para ver la pendiente, no solo el valor final):
-  `docker exec controlweb-app cat /sys/fs/cgroup/memory.peak` (bytes; umbral 440 MiB = 461.373.440), `docker exec controlweb-app sh -c "awk '/^VmHWM/ {print \$2}' /proc/1/status"`
-  (kB), `docker stats --no-stream`, `docker inspect --format '{{.State.OOMKilled}} {{.RestartCount}}' controlweb-app`; si se supera el umbral o
-  hay un `OOMKilled`, subir el límite a 640 MiB (ver «Medición de memoria»). Además: `docker stats` y OOM/reinicios, swap usado (~0), tamaño de copias y de `checks`, siete copias
-  verificadas (y las del PC), contadores `CW-EGRESS-DENY`, falsos positivos, heartbeat, caducidad del certificado, health de Rotten
-  Odds, número de 429, log de retención a las 04:45 y PR de Dependabot.
+| Paso | Qué | Dónde |
+|---|---|---|
+| Antes | 20 comprobaciones de solo lectura y qué resultado hace parar | «Antes de empezar en el servidor» |
+| **S0** ✅ | Cloudflare no desafía a `curl` (C4 omitido; se reconfirma en S8) | Guía, S0 |
+| **S1** | Swap de 2 GiB | Guía, S1 |
+| **S2** | SSH: `AllowUsers jose cwbackup`, `MaxAuthTries 3` | Guía, S2 |
+| **S3** | Deploy key, carpetas, `.env.prod` generado en el servidor | Guía, S3 |
+| **S4** | Red `controlweb_proxy` y firewall de salida + guardián | Guía, S4 |
+| **S5** | Primer despliegue interno con `release.ps1` (día 1 de S10) | Guía, S5 |
+| **S6** | Copias: claves age, scripts, units, sudoers, `cwbackup`, descarga al PC, `-VerifyRestore`, Hetzner | Guía, S6 |
+| **R1** | Único cambio en Rotten Odds (requisitos: red, `/opt/caddy-sites`, copia de Hetzner, copia local) | Guía, R1 |
+| **S7** | DNS y `caddy-install.sh` | Guía, S7 |
+| **S8** | Telegram, heartbeat, altas, reconfirmación de Cloudflare | Guía, S8 |
+| **S9** ⏸ | Batería final (incluye guardián del firewall, reinicio y rollback) | Guía, S9 |
+| **S10** ⏸ | Curva de memoria (día 1, 3 y 7) y revisión de una semana | Guía, S10 |
 
 ## 14. Riesgos
 

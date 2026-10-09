@@ -2,5 +2,5 @@
 #
 # ONE command with its exact arguments, nothing else: no wildcard, no second command, no SETENV/EXEC tag. deploy/deploy.sh uses it to
 # take the database backup before a deploy without a password prompt. Why this cannot be used to gain more privileges is explained in
-# docs/DESPLIEGUE.md ("Por qué la regla de sudoers no permite escalar privilegios").
+# docs/DESPLIEGUE.md ("Implementación de C7b-2", "Por qué no permite escalar privilegios").
 jose ALL=(root) NOPASSWD: /usr/bin/systemctl start controlweb-backup.service

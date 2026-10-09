@@ -382,7 +382,7 @@ tarea programada, comandos exactos): `docs/DESPLIEGUE.md`.
 `deploy/firewall/` (`controlweb-firewall.sh` -> `/usr/local/sbin/controlweb-firewall`, dos units, `install.sh`). Todo cuelga de `-i cw-egress` (dos saltos: `DOCKER-USER` -> `CW-EGRESS`,
 `INPUT` -> `CW-INPUT`); solo se crean/borran cadenas `CW-*`; REJECT nunca DROP; los saltos se añaden los últimos y `stop` los quita los primeros. La IP pública va en
 `/etc/controlweb/firewall.conf` (`PUBLIC_IP=`, `ALLOW_DNS=`), nunca en el repo. La unit va `Before=docker.service` y NO tiene dependencia fuerte con Docker en ningún sentido (si la tuviera,
-un fallo o un `stop` pararía Docker y Rotten Odds); `controlweb-firewall-guard.service` para SOLO `controlweb-app` si las reglas no están. Pruebas: `FirewallScriptTest` (iptables falso con estado +
+un fallo o un `stop` pararía Docker y Rotten Odds); `controlweb-firewall-guard.service` para SOLO el contenedor del servicio `controlweb-app` (se busca por etiquetas de Compose: Compose lo llama `controlweb-controlweb-app-1`) si las reglas no están. Pruebas: `FirewallScriptTest` (iptables falso con estado +
 `IptablesModel`, que falla ante reglas que no entiende), `FirewallUnitsGuardianTest`, `InstallFirewallScriptTest`. Guía y comandos de comprobación: `docs/DESPLIEGUE.md`.
 
 ## Caddy y ShellCheck (fase 2, pasos C7c-2 y C7c-3)

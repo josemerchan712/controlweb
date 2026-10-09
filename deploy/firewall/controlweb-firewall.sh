@@ -38,7 +38,8 @@ set -euo pipefail
 : "${CONF_FILE:=/etc/controlweb/firewall.conf}"
 
 BRIDGE=cw-egress
-APP_CONTAINER=controlweb-app
+# Compose names the container <project>-<service>-<n> (controlweb-controlweb-app-1), so it is found by its Compose labels, never by a name.
+APP_SERVICE=controlweb-app
 APP_PROJECT=controlweb
 # Destinations the application may never reach through cw-egress (the plan's rule 4).
 BLOCKED=(0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.0.2.0/24 192.168.0.0/16
@@ -194,17 +195,20 @@ cmd_guard() {
     return 0
   fi
   log "guard: the firewall is NOT active"
-  local project
-  project=$("$DOCKER" inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$APP_CONTAINER" 2> /dev/null || true)
-  if [ "$project" != "$APP_PROJECT" ]; then
-    log "guard: no $APP_CONTAINER container of the project $APP_PROJECT here: nothing to stop"
+  local ids id
+  ids=$("$DOCKER" ps -q --filter "label=com.docker.compose.project=$APP_PROJECT" --filter "label=com.docker.compose.service=$APP_SERVICE" 2> /dev/null || true)
+  if [ -z "$ids" ]; then
+    log "guard: no running container of the service $APP_SERVICE of the project $APP_PROJECT: nothing to stop"
     return 0
   fi
-  if "$DOCKER" stop "$APP_CONTAINER" > /dev/null 2>&1; then
-    log "guard: $APP_CONTAINER was stopped because it must not run without the firewall (start it again after fixing the firewall)"
-  else
-    log "guard: could not stop $APP_CONTAINER (is Docker running?)"
-  fi
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    if "$DOCKER" stop "$id" > /dev/null 2>&1; then
+      log "guard: the application ($id) was stopped because it must not run without the firewall (start it again after fixing the firewall)"
+    else
+      log "guard: could not stop the application ($id) (is Docker running?)"
+    fi
+  done <<< "$ids"
   return 0
 }
 
