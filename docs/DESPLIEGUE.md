@@ -206,7 +206,7 @@ real de **512 MiB** para la aplicación y 256 MiB para PostgreSQL, **10 minutos*
 
 | Dato | Resultado |
 |---|---|
-| Memoria de la aplicación (`docker stats`) | 322 MiB al principio → 338 MiB al final, la curva se aplana |
+| Memoria de la aplicación (`docker stats`) | 322,3 MiB (a los 134 s) → 337,7 MiB (a los 717 s); **seguía creciendo al final**, más despacio (tabla abajo) |
 | Pico de RSS del proceso (`VmHWM`) | 370.140 kB ≈ **361,5 MiB** |
 | Pico del cgroup (`memory.peak`) | 360.501.248 bytes ≈ **343,8 MiB** |
 | PostgreSQL | 43 MiB (límite 256 MiB) |
@@ -215,20 +215,44 @@ real de **512 MiB** para la aplicación y 256 MiB para PostgreSQL, **10 minutos*
 | Arranque de la aplicación | 24 s |
 | Todo el stack sano (incluye crear la base de datos desde cero) | 56 s |
 
-**Decisión: se mantiene `-Xmx256m` y el límite de contenedor de 512 MiB.** Margen: 150 MiB (29 %) sobre el pico de RSS y 168 MiB
-sobre el pico del cgroup.
+**Decisión: se mantiene `-Xmx256m` y el límite de contenedor de 512 MiB**, con la condición de la comprobación de S10. Margen
+medido: 150 MiB (29 %) sobre el pico de RSS y 168 MiB sobre el pico del cgroup, y 157 MiB sobre la última muestra de RSS.
 
-Límites de esta medición (no se pueden ignorar):
-- Son solo 10 minutos. El heap pudo seguir creciendo después; no se observó cuánto heap tenía reservado ni usado al final (en
-  producción solo se expone `/actuator/health`, y la imagen no trae `jcmd`). Peor caso razonado: el RSS ya incluye el heap reservado
-  hasta ese momento; si este era de 128 MiB y llegara a su máximo de 256 MiB, el RSS subiría hasta unos 470 MiB, todavía por debajo de
-  512 MiB pero con solo ~40 MiB de margen. Es un peor caso poco probable (el conjunto vivo es pequeño), y por eso hay una
-  comprobación a la semana con un umbral y una acción concreta (S10).
+Curva medida (17 muestras cada ~36 s, de 134 s a 717 s desde `up`; el arranque no está en la tabla; `anon` es el contador del cgroup):
+
+| t (s) | `docker stats` (MiB) | RSS (MiB) | anon (MiB) | | t (s) | `docker stats` (MiB) | RSS (MiB) | anon (MiB) |
+|---|---|---|---|---|---|---|---|---|
+| 134 | 322,3 | 340,8 | 319 | | 463 | 335,2 | 353,1 | 332 |
+| 171 | 327,8 | 344,8 | 322 | | 499 | 335,4 | 353,7 | 332 |
+| 207 | 329,7 | 347,7 | 325 | | 536 | 335,8 | 354,2 | 333 |
+| 244 | 330,4 | 348,5 | 327 | | 572 | 336,1 | 354,3 | 333 |
+| 280 | 332,3 | 350,5 | 329 | | 608 | 336,6 | 354,6 | 333 |
+| 317 | 334,1 | 351,7 | 330 | | 644 | 336,6 | 354,8 | 333 |
+| 353 | 334,0 | 352,1 | 329 | | 681 | 336,8 | 355,0 | 334 |
+| 390 | 333,8 | 352,2 | 331 | | 717 | 337,7 | 355,3 | 334 |
+| 426 | 334,5 | 352,5 | 331 | | | | | |
+
+Qué dicen estos números (y nada más):
+- **El RSS no se estabilizó en 10 minutos.** Subió en los 16 intervalos, sin ninguno a la baja: de 340,8 a 355,3 MiB (**+14,4 MiB**
+  en 583 s). `anon` pasó de 319 a 334 MiB (+15).
+- **Pero crece cada vez más despacio.** RSS por tramos: 134→280 s, +9,7 MiB (4,0 MiB/min); 280→499 s, +3,2 MiB (0,9 MiB/min);
+  499→717 s, +1,6 MiB (0,4 MiB/min); en los últimos 181 s, +1,05 MiB (0,35 MiB/min). `anon` en los mismos tramos: +10, +3 y +2 MiB.
+  Los hilos se mantuvieron entre 51 y 55; PostgreSQL pasó de 42,1 a 43,5 MiB.
+- **El pico de RSS (`VmHWM`, 361,5 MiB) está 6,2 MiB por encima de la muestra más alta (355,3 MiB):** ocurrió antes de la primera
+  muestra (el arranque) o entre dos muestras; la tabla no permite decir cuándo.
+- **No permite saber en qué valor se detiene** (si es que se detiene), y extrapolar una recta de 0,35 MiB/min no tiene sentido porque la
+  pendiente baja. Tampoco lo garantiza la configuración: los máximos de la JVM (heap 256 + metaspace 160 + caché de código 64 + memoria
+  directa 32) suman 512 MiB antes de contar las pilas de los hilos, las estructuras del GC y las bibliotecas nativas, así que no
+  demuestran por sí solos que quepa en el límite. Lo único que lo dirá es observarlo más tiempo: por eso S10.
+
+Otros límites de esta medición:
+- En producción solo se expone `/actuator/health` y la imagen no trae `jcmd`: no se observó cuánto heap había reservado ni usado.
 - Docker Desktop sobre WSL2, no un VPS Linux nativo: el consumo del propio runtime cambia, el de la JVM no demasiado.
 - La carga es mucho mayor que la real (29 sitios cada 30 s frente a 3 sitios cada 1-5 min).
 - No se ejercitó el job de retención (04:45), ni Telegram real, ni el heartbeat, ni tráfico real del endpoint público.
 
-Qué se hace con el resultado: la regla de S10 es **si `memory.peak` supera 440 MiB (86 % del límite), o hay un solo `OOMKilled` o
+Qué se hace con el resultado: como la memoria seguía creciendo, S10 no es una formalidad: se toman **tres lecturas** (día 1, día 3
+y día 7) para ver la pendiente, y la regla es **si `memory.peak` supera 440 MiB (86 % del límite), o hay un solo `OOMKilled` o
 reinicio, se sube el límite del contenedor a 640 MiB** (el reparto de la sección 7 admite +128 MiB: todos los límites suman unos
 3.240 MiB de 3.790) **sin tocar `-Xmx`**.
 
@@ -573,7 +597,8 @@ En Windows estas pruebas tardan unos 2 minutos (cada llamada a `docker` lanza un
   `Retry-After`; lo mismo cambiando `X-Forwarded-For` (sigue el 429); CORS de `/api/public/status` con el origen del portfolio
   (permitido) y con otro (no); `/api/sites` sin cabecera CORS desde el portfolio; `sudo reboot` (todo vuelve solo, firewall
   incluido); imagen rota a propósito (rollback automático); `deploy.sh rollback`; `restore-test`.
-- **S10 tras una semana:** **la curva de memoria** (la medición de C6 solo duró 10 minutos):
+- **S10 tras una semana:** **la curva de memoria** (la medición de C6 solo duró 10 minutos y el RSS seguía creciendo al terminar:
+  toma estas lecturas el día 1, el 3 y el 7 y apunta la fecha, para ver la pendiente, no solo el valor final):
   `docker exec controlweb-app cat /sys/fs/cgroup/memory.peak` (bytes; umbral 440 MiB = 461.373.440), `docker exec controlweb-app sh -c "awk '/^VmHWM/ {print \$2}' /proc/1/status"`
   (kB), `docker stats --no-stream`, `docker inspect --format '{{.State.OOMKilled}} {{.RestartCount}}' controlweb-app`; si se supera el umbral o
   hay un `OOMKilled`, subir el límite a 640 MiB (ver «Medición de memoria»). Además: `docker stats` y OOM/reinicios, swap usado (~0), tamaño de copias y de `checks`, siete copias
