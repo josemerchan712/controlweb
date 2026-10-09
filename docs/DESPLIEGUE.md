@@ -602,29 +602,162 @@ cat /var/lib/controlweb-backup/last                             # fecha, nombre 
 sudo ls -l /var/backups/controlweb                              # un .dump.age, modo 600, dueño root
 ```
 
-*Restaurar (incidencia).* La clave privada se copia al servidor **a la RAM** solo mientras dura la restauración y se destruye después:
+*Restaurar (incidencia).* La clave privada viaja a la **RAM** del servidor (`/dev/shm`), se usa en **una** ejecución de `restore.sh` y el propio
+script la **destruye siempre al terminar** (con `shred`, desde un `trap`): éxito, cualquier fallo, una opción mal escrita, solo «explicar»,
+Ctrl-C, `kill` o una desconexión. Para la siguiente restauración se vuelve a copiar. Cómo pasarla **sin dejarla en el historial de la terminal
+ni en un disco**:
 
-```bash
-# desde tu PC:  scp "$env:USERPROFILE\.controlweb\backup-identity.txt" jose@HOST:/dev/shm/controlweb-identity.txt
-sudo /usr/local/lib/controlweb/restore.sh --identity /dev/shm/controlweb-identity.txt /var/backups/controlweb/controlweb-FECHA.dump.age        # sin --yes: solo explica
-sudo /usr/local/lib/controlweb/restore.sh --identity /dev/shm/controlweb-identity.txt --yes /var/backups/controlweb/controlweb-FECHA.dump.age
-shred -u /dev/shm/controlweb-identity.txt
-```
+1. En el servidor, una orden corta **sin la clave**: crear el fichero vacío y privado *antes* de copiar nada dentro. Así nace con modo 600 y
+   no hay ni un instante en que otro usuario pueda leerla:
 
-`restore.sh` se niega a usar una identidad que esté en un disco (solo `tmpfs`/`ramfs`) salvo `--allow-disk-identity`. Antes de cambiar nada
-comprueba que la identidad descifra la copia y que el archivo tiene todas las tablas; toma una copia de seguridad de la base de datos actual
-(salvo `--no-safety-backup`); para la aplicación; restaura con `--clean --if-exists --exit-on-error --single-transaction` (si falla, la base de
-datos queda como estaba); y **no arranca la aplicación**: despliega después la versión que corresponda a esos datos
-(`deploy.sh rollback --force` o un despliegue nuevo).
+   ```powershell
+   ssh jose@HOST 'umask 077; : > /dev/shm/controlweb-identity.txt'
+   ```
 
-*Pruebas:* `BackupScriptsTest` (31 casos) ejecuta los tres scripts reales contra un `docker` y un `age` falsos: la copia contiene el volcado
+2. Desde tu PC, copiar el fichero (en `scp` el contenido va directo de fichero a fichero):
+
+   ```powershell
+   scp "$env:USERPROFILE\.controlweb\backup-identity.txt" jose@HOST:/dev/shm/controlweb-identity.txt
+   ```
+
+   La clave **no pasa por la línea de órdenes ni por el historial** (PowerShell y bash solo guardan la *ruta* del fichero), no se imprime
+   y `scp` no cambia los finales de línea (una tubería de PowerShell 5.1 los cambiaría a CRLF). **No pegues nunca la clave en una terminal**
+   ni la pases con `echo`, `cat` o `ssh 'echo ...'`: el historial de la shell la guardaría. Como el fichero ya existe con modo 600, `scp` lo
+   rellena sin cambiarle el modo.
+
+3. Ver qué haría, **sin clave** (explica y sale con estado 2, no toca nada):
+
+   ```bash
+   sudo /usr/local/lib/controlweb/restore.sh /var/backups/controlweb/controlweb-FECHA.dump.age
+   ```
+
+4. Restaurar. Antes de cambiar nada comprueba la identidad y que el archivo es completo; toma una copia de seguridad de la base de datos actual
+   (salvo `--no-safety-backup`); para la aplicación; restaura con `--clean --if-exists --exit-on-error --single-transaction` (si falla, la base
+   de datos queda como estaba); y **no arranca la aplicación**: despliega después la versión que corresponda a esos datos
+   (`deploy.sh rollback --force` o un despliegue nuevo):
+
+   ```bash
+   sudo /usr/local/lib/controlweb/restore.sh --identity /dev/shm/controlweb-identity.txt --yes /var/backups/controlweb/controlweb-FECHA.dump.age
+   ls -l /dev/shm/controlweb-identity.txt      # debe decir «No such file or directory»: el script la destruyó
+   ```
+
+5. Si no estás seguro de que se borró (se cortó la conexión y no viste el mensaje «the identity file ... was destroyed»):
+   `shred -u /dev/shm/controlweb-identity.txt`. Un reinicio del servidor vacía `/dev/shm` de todos modos.
+
+Reglas de `restore.sh` sobre la identidad: solo **borra** el fichero si está en RAM (`tmpfs`/`ramfs`) o si lo nombras con `--delete-identity` (nunca borra
+por sorpresa la única copia de una clave que esté en un disco); **se niega** a usar una identidad que esté en un disco (salvo `--allow-disk-identity`),
+que no sea una identidad de age, o cuyo modo no sea 600 (legible por otros). Riesgo residual, dicho con franqueza: `/dev/shm` es memoria, pero el
+núcleo puede mover páginas a la *swap* (el servidor tendrá 2 GiB, S1) y `shred` no borra una copia que ya estuviera allí. Es poco probable
+(minutos de vida) y la swap solo la lee root; si te preocupa, cuando haya memoria libre (`free -m`) puedes hacer `sudo swapoff -a && sudo swapon -a`.
+
+*Pruebas:* `BackupScriptsTest` (45 casos) ejecuta los tres scripts reales contra un `docker` y un `age` falsos: la copia contiene el volcado
 completo byte a byte (aunque `pg_restore --list` deje de leer pronto), permisos 0600/0700, rotación (14 días, mínimo 3), **ocho formas de
 copia mala** (`pg_restore --list` la rechaza, falta una tabla, `pg_restore --list` termina con error tras un índice completo, `pg_dump` falla, `age`
 falla, no escribe nada, escribe basura sin cabecera, escribe solo la cabecera) en las que no se acepta nada y **no se rota ninguna copia anterior**, claves incorrectas (falta, privada en el servidor, dos),
 no ser root, base de datos parada, disco lleno, bloqueo vivo y bloqueo viejo, restos de una ejecución caída, el test de restauración con
-limpieza garantizada en cuatro tipos de fallo, y `restore.sh` con y sin `--yes`, identidad errónea o en disco, fallo a mitad y `--target-db`.
-`InstallScriptTest` (solo Linux; la lógica también se ejecutó a mano en WSL) comprueba modos, repetición segura, el script que se vuelve
+limpieza garantizada en cuatro tipos de fallo, y `restore.sh` con y sin `--yes`, identidad errónea o en disco, fallo a mitad y `--target-db`; y que **la identidad se destruye
+siempre** (ocho resultados distintos, solo por estar en RAM, nunca un fichero de disco sin pedirlo, y Ctrl-C a mitad de la restauración).
+`InstallScriptTest` (solo Linux) se **ejecuta en el CI** (`ubuntu-latest`, job `verify`): `./mvnw verify` corre todas las pruebas sin
+filtros y la suposición que lo omite solo salta en Windows. Para que no se pueda omitir sin que nadie se entere, el job comprueba después de las
+pruebas el informe de surefire de `InstallScriptTest`, `BackupScriptsTest`, `DeployScriptTest` y `VerifyScriptsTest`: cada uno debe tener
+pruebas, **ninguna fallida y ninguna omitida** (paso «Check that the script tests really ran here»; `CiWorkflowTest` vigila que ese paso
+exista y que `verify` se llame sin perfiles ni filtros). En el portátil con Windows se omiten sus 10 casos; la lógica del instalador también
+se ejecutó a mano en WSL Ubuntu. Comprueba modos, repetición segura, el script que se vuelve
 escribible por el grupo, la clave privada en el fichero de la clave pública y las carpetas superiores.
+
+### Implementación de C7b-2: units de systemd y regla de `sudoers`
+
+Cuatro units y una regla, todo en `deploy/backup/` y todo instalado por `sudo deploy/backup/install.sh` (el mismo instalador de C7b-1):
+
+| Fichero del repo | Se instala en | Dueño y modo | Qué hace |
+|---|---|---|---|
+| `systemd/controlweb-backup.service` | `/etc/systemd/system/` | root:root 0644 | ejecuta `/usr/local/lib/controlweb/backup.sh` (`Type=oneshot`, `User=root`, sin argumentos) |
+| `systemd/controlweb-backup.timer` | ídem | root:root 0644 | todos los días **04:15 UTC**, `Persistent=true` (si el servidor estaba apagado, la hace al arrancar) |
+| `systemd/controlweb-restore-test.service` | ídem | root:root 0644 | ejecuta `restore-test.sh` (volcado NUEVO restaurado en `controlweb_restore_test`) |
+| `systemd/controlweb-restore-test.timer` | ídem | root:root 0644 | **domingos 05:00 UTC**, `Persistent=true` |
+| `controlweb-backup.sudoers` | `/etc/sudoers.d/controlweb-backup` | root:root **0440** | una sola regla, ver abajo |
+
+Por qué esas horas: la copia de Rotten Odds sale sobre las 03:30 UTC (más hasta 10 min de retraso aleatorio) y la purga de checks de ControlWeb
+(`app.retention.cron`) a las 03:30; a las 04:15 ninguna de las dos está en marcha. La prueba semanal va 45 minutos después de la copia diaria.
+Los dos servicios llevan límites de tiempo (20 y 30 min), prioridad baja de CPU y de disco (`Nice`, `IOSchedulingClass=idle`) para no molestar a
+Rotten Odds, y endurecimiento de systemd: `NoNewPrivileges`, `PrivateTmp`, `PrivateDevices`, `ProtectSystem=strict` (todo el sistema de ficheros
+en solo lectura salvo `ReadWritePaths=/var/backups/controlweb /var/lib/controlweb-backup /run`), `ProtectHome=yes` (no ven `/home`), y protección
+del núcleo, de los cgroups, de los bits SUID y de las políticas de tiempo real.
+
+**La regla de `sudoers`** (una única línea, sin comodines, sin etiquetas, sin segundo comando):
+
+```
+jose ALL=(root) NOPASSWD: /usr/bin/systemctl start controlweb-backup.service
+```
+
+La usa `deploy.sh` para hacer la copia antes de cada despliegue sin pedir contraseña (`sudo systemctl start controlweb-backup.service`).
+
+*Por qué no permite escalar privilegios:*
+
+1. **Solo ese comando con esos argumentos.** En `sudoers`, un comando con argumentos concretos solo coincide con esos argumentos exactos: nada de
+   `start otra.service`, de `restart`, de `--user`, de `-H` ni de órdenes añadidas detrás. No hay `*`, ni `ALL` como comando, ni `SETENV`: jose no
+   puede cambiar el entorno con el que se ejecuta `systemctl`.
+2. **`systemctl start` no ejecuta nada de jose.** El comando solo le pide a systemd (PID 1, que es root) que arranque una unit. Quien ejecuta el
+   script es **systemd con un entorno limpio**, no el proceso de `sudo`: ni las variables de jose (`PATH`, `LD_PRELOAD`, `BASH_ENV`...), ni su
+   directorio actual, ni su entrada estándar llegan al script. Además `start` no abre un paginador ni un editor (que serían la vía clásica de escape
+   con `less` o `vi`; los tendría `systemctl status` o `edit`, que la regla **no** permite).
+3. **La unit y el script solo los puede cambiar root.** `/etc/systemd/system/controlweb-backup.service` es root:root 0644 en una carpeta de root, y
+   `ExecStart` apunta a `/usr/local/lib/controlweb/backup.sh`, root:root 0755, dentro de carpetas de root (`/usr`, `/usr/local`, `/usr/local/lib`,
+   `/usr/local/lib/controlweb`). Si jose pudiera editar cualquiera de los dos, la regla sería «jose ejecuta lo que quiera como root». Por eso
+   `install.sh` **comprueba** dueño y modo de cada fichero y que **ninguna carpeta de la ruta** (scripts, units y `/etc/sudoers.d`) pertenezca a
+   otro usuario ni sea escribible por grupo u otros, y falla si algo no cuadra. El script **no se ejecuta nunca desde el clon** de jose.
+4. **La unit no admite argumentos ni lee ficheros de jose**: sin `EnvironmentFile`, sin `Environment`, sin `ExecStartPre`, sin shell, sin
+   `WorkingDirectory`. `backup.sh` solo lee `/etc/controlweb/backup-recipient.txt` (root:root) y habla con el contenedor de la base de datos.
+5. **El propio `sudoers` no se puede romper a medias.** `install.sh` comprueba el fichero con `visudo -cf` **antes** de instalar nada, lo copia con
+   un nombre temporal `controlweb-backup.new` (`sudo` ignora los ficheros cuyo nombre lleva un punto: no está activo), lo vuelve a validar y solo
+   entonces lo renombra (`mv` es atómico). Si `visudo` lo rechaza, el fichero activo anterior sigue como estaba. Al final ejecuta `visudo -c` sobre
+   **toda** la configuración y `systemd-analyze verify` sobre las units, y hace `daemon-reload`. Además se niega a instalar un fichero con más de una
+   regla, con `*`, `?`, `[`, `\`, `SETENV`, `EXEC` o un comando abierto.
+
+*Una advertencia honesta:* si jose está en el grupo `docker` (lo normal si ejecuta `docker compose` sin `sudo`), **jose ya es equivalente a root** en
+ese servidor (`docker run -v /:/host ...`). Esta regla no añade riesgo a esa situación, pero tampoco la arregla: lo que protege es el caso de una
+cuenta o un proceso que consiga `sudo` solo por este camino, y que la regla sea mínima y verificable. Compruébalo con `id` y decide si te vale.
+
+*Qué debe mostrar `sudo -l` para jose* (la lista puede incluir antes las reglas por defecto del sistema; lo importante es esta línea y que
+**no haya ninguna otra con `NOPASSWD`** que no conozcas):
+
+```
+User jose may run the following commands on HOST:
+    (root) NOPASSWD: /usr/bin/systemctl start controlweb-backup.service
+```
+
+Y la prueba de que solo vale eso (cada una de estas tres debe **pedir contraseña o negarse**; no ejecutes nada que no sea esto):
+
+```bash
+sudo -n systemctl restart controlweb-backup.service        # «sudo: a password is required»
+sudo -n systemctl start controlweb-restore-test.service    # «sudo: a password is required»
+sudo -n /usr/local/lib/controlweb/backup.sh                # «sudo: a password is required»
+sudo -n systemctl start controlweb-backup.service && echo "esta SÍ funciona (hace una copia de verdad)"
+```
+
+*Instalar y activar (S6, en el servidor, tú):*
+
+```bash
+sudo deploy/backup/install.sh                  # instala scripts, units y regla; valida con visudo y systemd-analyze; NO activa los timers
+sudo visudo -c                                 # debe terminar con «parsed OK» en /etc/sudoers y en /etc/sudoers.d/controlweb-backup
+sudo -l -U jose                                # debe mostrar la línea de arriba
+sudo /usr/local/lib/controlweb/backup.sh       # primera copia a mano (ver arriba)
+sudo systemctl enable --now controlweb-backup.timer controlweb-restore-test.timer
+systemctl list-timers 'controlweb-*'           # próxima ejecución 04:15 UTC y el domingo 05:00 UTC
+journalctl -u controlweb-backup.service -n 30  # resultado de la última copia
+```
+
+*Pruebas de C7b-2:* `SystemdUnitsGuardianTest` (7 casos, en cualquier sistema) vigila que la regla sea **exactamente** esa línea (sin `*`, sin segunda
+regla, sin `ALL`), que `deploy.sh` pida esa unit, que los servicios ejecuten un único script de `/usr/local/lib/controlweb` sin argumentos ni
+entorno, que conserven todo el endurecimiento y las rutas de escritura, que los horarios sean los acordados y que `install.sh` instale justo estos
+ficheros y nunca active un timer. `InstallScriptTest` (ahora 10 casos, Linux, también en CI) prueba con `visudo`, `systemctl` y `systemd-analyze` falsos
+que se instalan units 0644 y regla 0440, que se hace `daemon-reload` sin activar nada, que una regla rechazada por `visudo` no se instala (ni se copia
+nada), que una copia rechazada nunca llega a estar activa y deja intacta la anterior, que fallan `visudo -c`, `systemd-analyze` o `daemon-reload`, y que
+unit y regla vuelven a sus modos si se aflojan. Mutaciones verificadas (11, todas hacen fallar tests): comodín en la regla, segunda regla `ALL`, otro
+subcomando, argumento en `ExecStart`, quitar `NoNewPrivileges`, añadir `EnvironmentFile`, cambiar la hora, hacer diario el test semanal, activar los timers
+desde el instalador, ejecutar el script desde el clon y ampliar `ReadWritePaths`. Los validadores reales se ejecutaron a mano en WSL Ubuntu:
+`visudo -cf` aceptó la regla, `systemd-analyze verify` aceptó las units (salvo la dependencia de `docker.service`, que WSL no tiene) y
+`systemd-analyze calendar` confirmó los dos horarios (`04:15:00 UTC` diario, `Sun 05:00:00 UTC`).
 
 ## 13. Pasos
 
@@ -642,7 +775,7 @@ escribible por el grupo, la clave privada en el fichero de la clave pública y l
 | **C6 [CW]** ✅ | Dockerfile, `compose.prod.yml`, job de CI de la imagen | Hecho; medido en el portátil (ver «Medición de memoria») | revert |
 | **C7a [CW]** ✅ | `release.ps1` y `deploy.sh` con vuelta atrás | Hecho: ver «Implementación de C7a» | revert |
 | **C7b-1 [CW]** ✅ | Scripts de copia cifrada con `age`, restauración, prueba de restauración e instalador | Hecho: ver «Implementación de C7b-1» | revert |
-| **C7b-2 [CW]** | Units de systemd (copia 04:15 UTC, prueba semanal), regla de `sudoers` validada con `visudo -c` | tests estáticos | revert |
+| **C7b-2 [CW]** ✅ | Units de systemd (copia 04:15 UTC, prueba semanal), regla de `sudoers` validada con `visudo -c` | Hecho: ver «Implementación de C7b-2» | revert |
 | **C7b-3 [CW]** | Descarga a tu PC (`download-backups.ps1`), clave SSH restringida, tarea programada de Windows, verificación de restauración local | tests de `download-backups.ps1` | revert |
 | **C7c [CW]** | Cortafuegos de salida (`controlweb-firewall`), `caddy-install.sh`, fragmento de Caddy y shellcheck en CI | `bash -n`, shellcheck, revisión | revert |
 

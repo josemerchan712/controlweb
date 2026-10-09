@@ -1,0 +1,36 @@
+# Encrypted backup of the ControlWeb database. Started by controlweb-backup.timer (04:15 UTC every day) and by deploy.sh before every
+# deploy (`sudo systemctl start controlweb-backup.service`, the one command allowed by /etc/sudoers.d/controlweb-backup).
+#
+# Installed by deploy/backup/install.sh as /etc/systemd/system/controlweb-backup.service, owner root:root, mode 0644. Nobody but root can
+# change this file or the script it runs (/usr/local/lib/controlweb/backup.sh, root:root 0755 inside root-owned folders): that is what makes
+# it safe to let jose start it without a password. There is no argument, no environment and no shell in the command line below.
+[Unit]
+Description=ControlWeb encrypted database backup
+Documentation=file:///usr/local/lib/controlweb/backup.sh
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/lib/controlweb/backup.sh
+TimeoutStartSec=20min
+Nice=10
+IOSchedulingClass=idle
+SyslogIdentifier=controlweb-backup
+
+# What the script touches: the encrypted copies, its status files, the lock under /run, and the Docker socket (which lives in /run).
+# Everything else is read-only for this service, and it has no way to gain privileges or see the home folders.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/backups/controlweb /var/lib/controlweb-backup /run
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes

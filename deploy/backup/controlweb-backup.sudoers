@@ -1,0 +1,6 @@
+# /etc/sudoers.d/controlweb-backup -- installed by deploy/backup/install.sh (root:root, mode 0440) ONLY after `visudo -cf` accepted it.
+#
+# ONE command with its exact arguments, nothing else: no wildcard, no second command, no SETENV/EXEC tag. deploy/deploy.sh uses it to
+# take the database backup before a deploy without a password prompt. Why this cannot be used to gain more privileges is explained in
+# docs/DESPLIEGUE.md ("Por qué la regla de sudoers no permite escalar privilegios").
+jose ALL=(root) NOPASSWD: /usr/bin/systemctl start controlweb-backup.service

@@ -1,0 +1,12 @@
+# Weekly restore test, Sundays at 05:00 UTC: 45 minutes after the daily backup, so the newest stored copy it checks is hours old at most.
+[Unit]
+Description=Weekly ControlWeb restore test
+
+[Timer]
+OnCalendar=Sun *-*-* 05:00:00 UTC
+Persistent=true
+AccuracySec=1min
+Unit=controlweb-restore-test.service
+
+[Install]
+WantedBy=timers.target

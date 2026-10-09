@@ -352,6 +352,15 @@ se acepta, se borra el parcial y **no se rota nada** (rotación: 14 días, siemp
 `restore.sh` exige `--yes`, una identidad en RAM (`/dev/shm`), comprueba antes de tocar nada, hace copia previa, para la app y restaura en una
 transacción. Pruebas: `BackupScriptsTest`, `InstallScriptTest`. Detalle y comandos en `docs/DESPLIEGUE.md`.
 
+## Units de systemd y regla de sudoers (fase 2, paso C7b-2)
+`deploy/backup/systemd/` (cuatro units: copia diaria 04:15 UTC, prueba de restauración los domingos 05:00 UTC, ambas `Persistent`, con
+endurecimiento de systemd) y `deploy/backup/controlweb-backup.sudoers` (UNA línea: `jose ALL=(root) NOPASSWD: /usr/bin/systemctl start
+controlweb-backup.service`, sin comodines ni etiquetas). `install.sh` las instala (units root:root 0644, regla 0440) validando antes con
+`visudo -cf` (también sobre la copia instalada, con nombre temporal `.new` que sudo ignora), `visudo -c`, `systemd-analyze verify` y
+`daemon-reload`; **no activa los timers**. Por qué no permite escalar (dueño/modo de unit y script, entorno limpio de systemd, comando exacto) y
+qué debe mostrar `sudo -l`: `docs/DESPLIEGUE.md`. Pruebas: `SystemdUnitsGuardianTest`, `InstallScriptTest` (CI Linux). Si cambias la regla,
+cambia también `deploy.sh` y el guardián. `restore.sh` destruye SIEMPRE la identidad age (trap EXIT con `shred`, también tras Ctrl-C/kill).
+
 ## Publicar y volver atrás (fase 2, paso C7a)
 `deploy/release.ps1` (PC, PowerShell 5.1: construye desde un worktree limpio de un commit subido, guarda la imagen en un fichero —nunca por
 una tubería—, la sube con su SHA-256 y lanza el despliegue) y `deploy/deploy.sh` (servidor, sin root: comprobaciones antes de cambiar nada,

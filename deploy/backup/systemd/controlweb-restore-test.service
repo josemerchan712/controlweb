@@ -1,0 +1,30 @@
+# Weekly proof that the database can be dumped AND restored (into the throw-away database controlweb_restore_test, always dropped).
+# Started by controlweb-restore-test.timer (Sundays 05:00 UTC). Same ownership rules and hardening as controlweb-backup.service:
+# installed by deploy/backup/install.sh as root:root 0644, running /usr/local/lib/controlweb/restore-test.sh (root:root 0755).
+[Unit]
+Description=ControlWeb weekly restore test (fresh dump restored into a temporary database)
+Requires=docker.service
+After=docker.service controlweb-backup.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/lib/controlweb/restore-test.sh
+TimeoutStartSec=30min
+Nice=15
+IOSchedulingClass=idle
+SyslogIdentifier=controlweb-restore-test
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/backups/controlweb /var/lib/controlweb-backup /run
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes

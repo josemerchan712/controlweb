@@ -34,6 +34,9 @@ class InstallScriptTest {
 	private Path backups;
 	private Path state;
 	private Path bin;
+	private Path systemd;
+	private Path sudoers;
+	private Path log;
 
 	private record Result(int exit, String output) {
 	}
@@ -48,6 +51,27 @@ class InstallScriptTest {
 		bin = Files.createDirectories(temp.resolve("bin"));
 		Files.writeString(bin.resolve("age"), "#!/bin/sh\nexit 0\n");
 		bin.resolve("age").toFile().setExecutable(true);
+		systemd = temp.resolve("etc/systemd/system");
+		sudoers = temp.resolve("etc/sudoers.d");
+		log = temp.resolve("calls.log");
+		// fakes: the real visudo/systemctl/systemd-analyze need root and a real system; here we check how install.sh REACTS to their answers
+		// (the real tools are run against the real files by hand, see docs/DESPLIEGUE.md)
+		fake("visudo", "echo \"visudo $*\" >> '" + log + "'\n"
+				+ "target=${2:-}\n"
+				+ "case \"${FAKE_VISUDO_FAIL:-}\" in all) exit 1;; new) case \"$target\" in *.new) exit 1;; esac;; check) [ \"$1\" = -c ] && exit 1;; esac\n"
+				+ "exit 0\n");
+		fake("systemctl", "echo \"systemctl $*\" >> '" + log + "'\nexit ${FAKE_SYSTEMCTL_EXIT:-0}\n");
+		fake("systemd-analyze", "echo \"systemd-analyze $*\" >> '" + log + "'\nexit ${FAKE_ANALYZE_EXIT:-0}\n");
+	}
+
+	private void fake(String name, String body) throws IOException {
+		Path file = bin.resolve(name);
+		Files.writeString(file, "#!/bin/sh\n" + body);
+		file.toFile().setExecutable(true);
+	}
+
+	private String calls() throws IOException {
+		return Files.exists(log) ? Files.readString(log) : "";
 	}
 
 	private String command(String... command) throws Exception {
@@ -67,6 +91,11 @@ class InstallScriptTest {
 		environment.put("ETC_DIR", etc.toString());
 		environment.put("BACKUP_DIR", backups.toString());
 		environment.put("STATE_DIR", state.toString());
+		environment.put("SYSTEMD_DIR", systemd.toString());
+		environment.put("SUDOERS_DIR", sudoers.toString());
+		environment.put("VISUDO", bin.resolve("visudo").toString());
+		environment.put("SYSTEMCTL", bin.resolve("systemctl").toString());
+		environment.put("SYSTEMD_ANALYZE", bin.resolve("systemd-analyze").toString());
 		environment.putAll(extra);
 		ProcessBuilder builder = new ProcessBuilder("bash", "deploy/backup/install.sh").redirectErrorStream(true);
 		builder.directory(Path.of("").toAbsolutePath().toFile());
@@ -142,5 +171,80 @@ class InstallScriptTest {
 		assertThat(result.exit()).isEqualTo(1);
 		assertThat(result.output()).contains("age is not installed");
 		assertThat(lib).doesNotExist();
+	}
+
+	@Test
+	@DisplayName("install: units 0644 and the sudoers rule 0440 are installed, daemon-reload runs, and the timers are NOT enabled")
+	void installsUnitsAndRule() throws Exception {
+		Result result = install(Map.of());
+
+		assertThat(result.exit()).as(result.output()).isZero();
+		for (String unit : List.of("controlweb-backup.service", "controlweb-backup.timer", "controlweb-restore-test.service", "controlweb-restore-test.timer")) {
+			assertThat(mode(systemd.resolve(unit))).isEqualTo("rw-r--r--");
+			assertThat(Files.readString(systemd.resolve(unit))).isEqualTo(Files.readString(Path.of("deploy/backup/systemd", unit)));
+		}
+		assertThat(mode(sudoers.resolve("controlweb-backup"))).isEqualTo("r--r-----");
+		assertThat(sudoers.resolve("controlweb-backup.new")).doesNotExist();
+		assertThat(Files.readString(sudoers.resolve("controlweb-backup"))).isEqualTo(Files.readString(Path.of("deploy/backup/controlweb-backup.sudoers")));
+		assertThat(calls()).contains("visudo -cf").contains("visudo -c\n").contains("systemd-analyze verify controlweb-backup.service").contains("systemctl daemon-reload")
+				.doesNotContain("enable").doesNotContain("start");
+		assertThat(result.output()).contains("NOT enabled yet");
+	}
+
+	@Test
+	@DisplayName("install: a rule that visudo rejects is never installed (nothing in /etc/sudoers.d, nothing copied)")
+	void rejectedRuleIsNotInstalled() throws Exception {
+		Result result = install(Map.of("FAKE_VISUDO_FAIL", "all"));
+
+		assertThat(result.exit()).isEqualTo(1);
+		assertThat(result.output()).contains("visudo does not accept");
+		assertThat(sudoers).doesNotExist();
+		assertThat(lib).doesNotExist();
+		assertThat(systemd).doesNotExist();
+	}
+
+	@Test
+	@DisplayName("install: if visudo rejects the installed copy, the file never becomes active and the previous rule stays")
+	void rejectedCopyNeverBecomesActive() throws Exception {
+		install(Map.of());
+		String before = Files.readString(sudoers.resolve("controlweb-backup"));
+		Files.writeString(sudoers.resolve("controlweb-backup.new"), "stale leftover\n");
+
+		Result result = install(Map.of("FAKE_VISUDO_FAIL", "new"));
+
+		assertThat(result.exit()).isEqualTo(1);
+		assertThat(result.output()).contains("was NOT activated");
+		assertThat(sudoers.resolve("controlweb-backup.new")).doesNotExist();
+		assertThat(Files.readString(sudoers.resolve("controlweb-backup"))).isEqualTo(before);
+	}
+
+	@Test
+	@DisplayName("install: if the whole sudoers configuration fails visudo -c, or systemd rejects the units, it fails loudly")
+	void failingValidationsFailTheInstall() throws Exception {
+		Result sudoersBroken = install(Map.of("FAKE_VISUDO_FAIL", "check"));
+		Result unitsBroken = install(Map.of("FAKE_ANALYZE_EXIT", "1"));
+		Result reloadBroken = install(Map.of("FAKE_SYSTEMCTL_EXIT", "1"));
+
+		assertThat(sudoersBroken.exit()).isEqualTo(1);
+		assertThat(sudoersBroken.output()).contains("visudo -c reports an error");
+		assertThat(unitsBroken.exit()).isEqualTo(1);
+		assertThat(unitsBroken.output()).contains("systemd-analyze verify rejected");
+		assertThat(reloadBroken.exit()).isEqualTo(1);
+		assertThat(reloadBroken.output()).contains("daemon-reload failed");
+	}
+
+	@Test
+	@DisplayName("install: a unit or the sudoers file that became writable by others is put right by installing again")
+	void looseUnitIsPutRight() throws Exception {
+		install(Map.of());
+		Files.setPosixFilePermissions(systemd.resolve("controlweb-backup.service"), java.nio.file.attribute.PosixFilePermissions.fromString("rw-rw-rw-"));
+		Path rule = sudoers.resolve("controlweb-backup");
+		Files.setPosixFilePermissions(rule, java.nio.file.attribute.PosixFilePermissions.fromString("rw-rw-r--"));
+
+		Result result = install(Map.of());
+
+		assertThat(result.exit()).isZero();
+		assertThat(mode(systemd.resolve("controlweb-backup.service"))).isEqualTo("rw-r--r--");
+		assertThat(mode(rule)).isEqualTo("r--r-----");
 	}
 }
