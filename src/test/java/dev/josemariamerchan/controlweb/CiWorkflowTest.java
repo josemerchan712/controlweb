@@ -37,6 +37,20 @@ class CiWorkflowTest {
 	}
 
 	@Test
+	@DisplayName("CI runs the full verify (no test filter or skip flag) and proves that no script test was skipped on the Linux runner")
+	void scriptTestsMustReallyRunInCi() throws IOException {
+		String workflow = read(WORKFLOW);
+
+		assertThat(workflow).contains("run: ./mvnw --batch-mode --no-transfer-progress verify\n");
+		assertThat(workflow).doesNotContain("-Dtest").doesNotContain("-DskipTests").doesNotContain("-Dmaven.test.skip").doesNotContain("excludedGroups")
+				.doesNotContain("-P fast").doesNotContain("-Pfast");
+		assertThat(workflow).contains("Check that the script tests really ran here (none skipped)")
+				.contains("for test in InstallScriptTest BackupScriptsTest DeployScriptTest VerifyScriptsTest; do")
+				.contains("tests=\"[1-9][0-9]*\" errors=\"0\" skipped=\"0\" failures=\"0\"");
+		assertThat(workflow.indexOf("Check that the script tests")).isGreaterThan(workflow.indexOf("verify\n"));
+	}
+
+	@Test
 	@DisplayName("permissions are read-only and no secret or private variable is referenced")
 	void readOnlyAndNoSecrets() throws IOException {
 		String workflow = read(WORKFLOW);

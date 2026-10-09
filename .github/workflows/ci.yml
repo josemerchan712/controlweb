@@ -42,6 +42,21 @@ jobs:
       - name: Build and test (unit + integration)
         run: ./mvnw --batch-mode --no-transfer-progress verify
 
+      # The tests that drive the real shell scripts skip themselves when bash, PowerShell or POSIX permissions are missing (as on a
+      # Windows laptop). On this Linux runner every one of them must RUN: a silently skipped test proves nothing, so the surefire
+      # report of each is checked for "some tests, none failed, none skipped".
+      - name: Check that the script tests really ran here (none skipped)
+        run: |
+          for test in InstallScriptTest BackupScriptsTest DeployScriptTest VerifyScriptsTest; do
+            report="target/surefire-reports/TEST-dev.josemariamerchan.controlweb.deploy.$test.xml"
+            if ! grep -Eq 'tests="[1-9][0-9]*" errors="0" skipped="0" failures="0"' "$report"; then
+              echo "$test did not run completely on this runner:"
+              grep -o '<testsuite[^>]*>' "$report" | head -c 600
+              exit 1
+            fi
+            echo "ok: $test ran with no skipped test"
+          done
+
       - name: Keep the test reports when something fails
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
