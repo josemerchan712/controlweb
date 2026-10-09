@@ -121,6 +121,7 @@ fi
 # the whole sudoers configuration must still be valid, and the units must pass systemd's own checks
 "$VISUDO" -c > /dev/null || die "visudo -c reports an error in the sudoers configuration: fix it NOW (run: sudo visudo -c)"
 if command -v "$SYSTEMD_ANALYZE" > /dev/null 2>&1; then
+  # shellcheck disable=SC2086 # UNITS is our own fixed list of unit file names: word splitting is exactly what is wanted
   (cd "$SYSTEMD_DIR" && "$SYSTEMD_ANALYZE" verify $UNITS) || die "systemd-analyze verify rejected the units"
 fi
 "$SYSTEMCTL" daemon-reload || die "systemctl daemon-reload failed"

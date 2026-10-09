@@ -129,10 +129,19 @@ cmd_stop() {
 
 new_or_flush() { if chain_present "$1"; then ipt -F "$1"; else ipt -N "$1"; fi; }
 
+# Anything that fails while starting takes our own rules away again: never leave a half-built firewall.
+undo_on_failure() {
+  local status=$?
+  if [ "$status" -ne 0 ]; then
+    log "FAILED: removing our rules again" >&2
+    remove_jumps || true
+    remove_chains || true
+  fi
+}
+
 cmd_start() {
   read_conf
-  # Anything that fails from here on takes our own rules away again: never leave a half-built firewall.
-  trap 'status=$?; if [ "$status" -ne 0 ]; then log "FAILED: removing our rules again" >&2; remove_jumps || true; remove_chains || true; fi' EXIT
+  trap undo_on_failure EXIT
 
   new_or_flush CW-DENY
   new_or_flush CW-EGRESS
@@ -191,9 +200,11 @@ cmd_guard() {
     log "guard: no $APP_CONTAINER container of the project $APP_PROJECT here: nothing to stop"
     return 0
   fi
-  "$DOCKER" stop "$APP_CONTAINER" > /dev/null 2>&1 \
-    && log "guard: $APP_CONTAINER was stopped because it must not run without the firewall (start it again after fixing the firewall)" \
-    || log "guard: could not stop $APP_CONTAINER (is Docker running?)"
+  if "$DOCKER" stop "$APP_CONTAINER" > /dev/null 2>&1; then
+    log "guard: $APP_CONTAINER was stopped because it must not run without the firewall (start it again after fixing the firewall)"
+  else
+    log "guard: could not stop $APP_CONTAINER (is Docker running?)"
+  fi
   return 0
 }
 

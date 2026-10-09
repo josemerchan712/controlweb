@@ -72,7 +72,7 @@ log "== Hardening as applied by Docker (deploy/verify-container.sh) =="
 bash "$(dirname "$0")/verify-container.sh" "$app" 2>&1 | tee -a "$report"
 
 api() { # api <method> <path> [json-body] [token]
-  local method=$1 path=$2 body=${3:-} token=${4:-}
+  local path=$2 body=${3:-} token=${4:-}   # $1 (the method) is documentation: wget POSTs by itself when --post-data is given
   local args=(-q -O - -T 15)
   [ -n "$token" ] && args+=(--header "Authorization: Bearer $token")
   [ -n "$body" ] && args+=(--header "Content-Type: application/json" --post-data "$body")

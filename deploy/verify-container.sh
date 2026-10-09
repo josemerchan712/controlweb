@@ -53,6 +53,7 @@ expect "log max-file" "3" "$(inspect '{{index .HostConfig.LogConfig.Config "max-
 expect_contains "tmpfs /tmp options" "noexec" "$(inspect '{{json .HostConfig.Tmpfs}}')"
 ports=$(inspect '{{json .HostConfig.PortBindings}}')
 case "$ports" in '{}'|'null') echo "ok:   no published port" ;; *) echo "FAIL: published ports: $ports" >&2; failures=$((failures + 1)) ;; esac
+# shellcheck disable=SC2016 # the $name / $net below are variables of the Go template that docker inspect runs, not of the shell
 expect "networks" "controlweb_db controlweb_egress controlweb_proxy" \
   "$(inspect '{{range $name, $net := .NetworkSettings.Networks}}{{$name}} {{end}}' | words)"
 expect "IP on the proxy network" "10.77.0.20" "$(inspect '{{(index .NetworkSettings.Networks "controlweb_proxy").IPAddress}}')"

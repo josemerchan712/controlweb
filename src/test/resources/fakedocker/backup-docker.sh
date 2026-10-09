@@ -20,17 +20,18 @@ case "$command_name" in
     ;;
   stop) echo "stopped $1" >> "$state/calls.log" ;;
   exec)
-    shift_i=no
-    [ "$1" = "-i" ] && { shift_i=yes; shift; }
+    if [ "$1" = "-i" ]; then shift; fi
     shift # the container
     arguments="$*"
+    # shellcheck disable=SC2016 # the literal text of the command to recognise: its $ must NOT expand here
+    db_name_probe='printf %s "$POSTGRES_DB"'
     case "$arguments" in
       *pg_dump*)
         [ -z "${FAKE_DUMP_DELAY:-}" ] || sleep "$FAKE_DUMP_DELAY"
         if [ -n "${FAKE_DUMP_FAIL:-}" ]; then head -c 100000 "${FAKE_DUMP_FILE:?}"; exit 1; fi
         cat "${FAKE_DUMP_FILE:?}"
         ;;
-      *"pg_restore --list"*|"pg_restore --list")
+      *"pg_restore --list"*)
         head -c 16 > /dev/null # pg_restore --list reads the table of contents and stops: it does not read the whole stream
         if [ -n "${FAKE_LIST_FAIL:-}" ]; then echo "pg_restore: error: input file does not appear to be a valid archive" >&2; exit 1; fi
         for object in sites checks incidents alert_rules users flyway_schema_history; do
@@ -49,7 +50,7 @@ case "$command_name" in
         echo "pg_restore into $database: $arguments" >> "$state/calls.log"
         [ -z "${FAKE_RESTORE_FAIL:-}" ] || { echo "pg_restore: error: could not execute query" >&2; exit 1; }
         ;;
-      *'printf %s "$POSTGRES_DB"'*) printf '%s' "controlweb" ;;
+      *"$db_name_probe"*) printf '%s' "controlweb" ;;
       *psql*)
         # docker exec db sh -c 'psql ... "$1" ... "$2"' sh <database> <sql>
         sql=${arguments#*sh -c * sh }

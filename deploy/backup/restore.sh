@@ -113,6 +113,7 @@ main() {
   case "$(basename "$backup")" in controlweb-*.dump.age) ;; *) die "'$backup' does not look like a ControlWeb backup (controlweb-*.dump.age)" ;; esac
 
   if [ -z "$identity" ]; then
+    # shellcheck disable=SC2016 # the single quotes are literal characters inside a double-quoted ${..:+..}; $target does expand
     echo "Would restore $(basename "$backup") into ${target:+the database '$target'}${target:-the REAL database} (this DELETES its current contents)."
     [ "$safety" = yes ] && echo "A safety backup of the current database would be taken first."
     [ -z "$target" ] && echo "The application would be stopped and left stopped."

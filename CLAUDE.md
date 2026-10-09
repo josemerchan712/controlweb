@@ -385,6 +385,13 @@ tarea programada, comandos exactos): `docs/DESPLIEGUE.md`.
 un fallo o un `stop` pararía Docker y Rotten Odds); `controlweb-firewall-guard.service` para SOLO `controlweb-app` si las reglas no están. Pruebas: `FirewallScriptTest` (iptables falso con estado +
 `IptablesModel`, que falla ante reglas que no entiende), `FirewallUnitsGuardianTest`, `InstallFirewallScriptTest`. Guía y comandos de comprobación: `docs/DESPLIEGUE.md`.
 
+## Caddy y ShellCheck (fase 2, pasos C7c-2 y C7c-3)
+`deploy/caddy/controlweb.caddy` (el fragmento de `docs/DESPLIEGUE.md`) solo se instala con `sudo deploy/caddy/caddy-install.sh [--check]`: comprueba el fragmento (único sitio `status-api.josemariamerchan.dev`, único upstream
+`controlweb-app:8080`, sin import/exec/ficheros/entorno), lo valida con un contenedor desechable de la MISMA imagen (por id) que el Caddy en marcha sobre una copia de la carpeta de sitios, lo mueve con renombrado atómico, recarga
+sin corte y, si el reload falla, restaura el anterior; cualquier fallo deja `/opt/caddy-sites` idéntica. Prueba: `CaddyInstallScriptTest` (docker falso). El job `shellcheck` del CI revisa TODOS los `*.sh` con la imagen fijada por
+digest; los avisos se arreglan o se silencian en el script con `# shellcheck disable=SCxxxx # motivo` (nunca `.shellcheckrc`/`--exclude`); lo vigila `ShellcheckGuardianTest`. Antes de un commit que toque un `.sh`:
+`docker run --rm -v "${PWD}:/mnt" -w /mnt koalaman/shellcheck:stable --source-path=SCRIPTDIR --external-sources @(git ls-files '*.sh')`.
+
 ## Publicar y volver atrás (fase 2, paso C7a)
 `deploy/release.ps1` (PC, PowerShell 5.1: construye desde un worktree limpio de un commit subido, guarda la imagen en un fichero —nunca por
 una tubería—, la sube con su SHA-256 y lanza el despliegue) y `deploy/deploy.sh` (servidor, sin root: comprobaciones antes de cambiar nada,

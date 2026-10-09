@@ -72,7 +72,7 @@ else
 fi
 profile=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$image" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep '^SPRING_PROFILES_ACTIVE=' || true)
 profile=$(trim "$profile")
-[ "$profile" = "SPRING_PROFILES_ACTIVE=prod" ] && ok "default profile is prod" || fail "default profile is not prod ($profile)"
+if [ "$profile" = "SPRING_PROFILES_ACTIVE=prod" ]; then ok "default profile is prod"; else fail "default profile is not prod ($profile)"; fi
 
 echo "size: $(docker image inspect --format '{{.Size}}' "$image" | awk '{printf "%.0f MB", $1/1000000}')"
 if [ "$failures" -gt 0 ]; then

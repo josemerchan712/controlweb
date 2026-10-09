@@ -19,6 +19,7 @@
 : "${WAIT_SECONDS:=120}"                                # how long to wait for the verification of a copy to finish
 
 # The only database the restore test may create or drop. Never the real one.
+# shellcheck disable=SC2034 # read by restore-test.sh and restore.sh, which source this file
 TEST_DB=controlweb_restore_test
 # Objects every valid copy must contain (checked in the table of contents of the archive).
 REQUIRED_OBJECTS=(sites checks incidents alert_rules users flyway_schema_history)

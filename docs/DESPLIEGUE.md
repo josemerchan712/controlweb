@@ -474,6 +474,27 @@ prohibidos rechazados **antes** de preguntarle nada a Docker, cerrojo ajeno, arg
 *Mutaciones verificadas* (20, todas hacen fallar tests): saltarse la validación; validar con otra imagen o con red; no deshacer tras una recarga fallida (con y sin anterior); no exigir el `import`; no exigir el dominio; no comprobar el montaje; validar la carpeta
 real en vez de la copia; aceptar el primero de varios Caddy; recargar en `--check`; copiar en vez de renombrar; no guardar el anterior; no exigir el upstream; desactivar la lista de directivas o de marcadores; ignorar el cerrojo; no borrar la carpeta de trabajo; y, en el fragmento, quitar el 404 de las rutas ocultas o apuntar a otro upstream.
 
+### Implementación de C7c-3: ShellCheck en el CI
+
+Un job `shellcheck` en `.github/workflows/ci.yml` ejecuta ShellCheck sobre **todos** los ficheros `*.sh` versionados (`git ls-files -z '*.sh'`: los scripts que corren como root en el VPS, los de despliegue y los
+sustitutos de las pruebas), con la severidad por defecto (incluye avisos de estilo), con `--source-path=SCRIPTDIR --external-sources` para seguir los `source`, y con la imagen `koalaman/shellcheck` **fijada por digest**
+(`stable` = ShellCheck 0.11.0 el 2026-10-09), para que salgan los mismos avisos en el CI y en tu portátil. Actualizar el digest es una decisión (Dependabot no mira los workflows), no una sorpresa. El `mvnw` del wrapper de Maven
+no tiene extensión `.sh` y no se revisa (es código generado de Maven).
+
+*Cómo se ejecuta en tu portátil* (la imagen ya la tienes; en PowerShell):
+
+```powershell
+$files = git ls-files '*.sh'
+docker run --rm -v "${PWD}:/mnt" -w /mnt koalaman/shellcheck:stable --source-path=SCRIPTDIR --external-sources @files
+```
+
+*Reglas para los avisos*: no hay `.shellcheckrc`, ni `--exclude`, ni `|| true`, ni `continue-on-error`. Un aviso se arregla, o se silencia **en el propio script** con `# shellcheck disable=SCxxxx # motivo` (códigos concretos y un motivo escrito).
+`ShellcheckGuardianTest` lo vigila: el job no puede debilitarse, no puede haber `.shellcheckrc`, y cada `disable=` del repositorio tiene códigos concretos y un motivo de al menos 15 caracteres (cada una de las 7 mutaciones lo hace fallar).
+
+*Qué salió al pasarlo por primera vez*: 14 avisos en 10 ficheros, **todos tratados**: 8 arreglados en el código (una variable sin uso en `deploy.sh`, otra en `measure-memory.sh`, `A && B || C` en `verify-image.sh` y en el guardián del firewall,
+el `trap` del firewall, ahora una función, que ShellCheck veía como variable sin asignar, y dos patrones/variables muertos en el `docker` falso de las copias) y 6 silenciados con motivo (variable que otro script lee tras `source`, lista de nombres de
+units que se trocea a propósito, dos plantillas de Go y texto literal que contiene un `$`, una comilla simple dentro de un `${..:+..}`). Prueba de que el job protege: añadir `rm -rf $BACKUP_DIR/$1` a `serve-backup.sh` hace que ShellCheck falle con SC2115 y SC2086.
+
 ## 11. Pruebas SSRF de límites
 
 `HostSafetyValidator` (resolver falso). **Permitir:** 172.67.164.248, 104.21.49.164, 172.15.255.255, 172.32.0.0, 100.63.255.255,
@@ -1076,7 +1097,7 @@ por eso la regla lleva `Defaults:cwbackup !use_pty` (sin terminal en este flujo 
 | **C7b-1 [CW]** ✅ | Scripts de copia cifrada con `age`, restauración, prueba de restauración e instalador | Hecho: ver «Implementación de C7b-1» | revert |
 | **C7b-2 [CW]** ✅ | Units de systemd (copia 04:15 UTC, prueba semanal), regla de `sudoers` validada con `visudo -c` | Hecho: ver «Implementación de C7b-2» | revert |
 | **C7b-3 [CW]** ✅ | Descarga a tu PC (`download-backups.ps1`), clave SSH restringida, tarea programada de Windows, verificación de restauración local | Hecho: ver «Implementación de C7b-3» | revert |
-| **C7c [CW]** | Cortafuegos de salida (`controlweb-firewall`), `caddy-install.sh`, fragmento de Caddy y shellcheck en CI | C7c-1 y C7c-2 hechos (ver sus secciones); falta C7c-3 (shellcheck en CI) | revert |
+| **C7c [CW]** ✅ | Cortafuegos de salida (`controlweb-firewall`), `caddy-install.sh`, fragmento de Caddy y shellcheck en CI | Hecho: ver «Implementación de C7c-1», «C7c-2» y «C7c-3» | revert |
 
 **Requisitos de C5 (añadidos al aprobar C1):**
 - El perfil `prod` **debe negarse a arrancar si `app.proxy.trusted-addresses` está vacío**, con test. Sin esa IP todos los

@@ -73,6 +73,7 @@ fi
 [ "$problems" -eq 0 ] || die "$problems permission problem(s): do NOT start the firewall until they are fixed"
 
 if command -v "$SYSTEMD_ANALYZE" > /dev/null 2>&1; then
+  # shellcheck disable=SC2086 # UNITS is our own fixed list of unit file names: word splitting is exactly what is wanted
   (cd "$SYSTEMD_DIR" && "$SYSTEMD_ANALYZE" verify $UNITS) || die "systemd-analyze verify rejected the units"
 fi
 "$SYSTEMCTL" daemon-reload || die "systemctl daemon-reload failed"

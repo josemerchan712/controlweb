@@ -65,6 +65,26 @@ jobs:
           path: target/surefire-reports/
           retention-days: 7
 
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      # EVERY tracked *.sh file (scripts that run as root on the VPS, the deploy scripts and the test stand-ins), at ShellCheck's default
+      # severity (style notes included). The image is pinned by digest (the index of koalaman/shellcheck:stable, ShellCheck 0.11.0, on
+      # 2026-10-09) so the same warnings appear here and on the laptop; update the digest on purpose, not by surprise. There is no
+      # .shellcheckrc, no --exclude and no "|| true": a warning is either fixed or silenced IN the script with `# shellcheck disable=SCxxxx # reason`.
+      - name: ShellCheck all shell scripts
+        run: |
+          git ls-files -z '*.sh' | xargs -0 docker run --rm -v "$PWD:/mnt" -w /mnt \
+            koalaman/shellcheck@sha256:bb596a0d169b85ddd81d8b6d3a2ff6d5baf5fca10b97f575ebc647c3dff62b3d \
+            --source-path=SCRIPTDIR --external-sources
+
   image:
     name: production image
     runs-on: ubuntu-latest

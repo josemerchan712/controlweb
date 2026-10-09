@@ -93,9 +93,8 @@ start_release() { compose up -d || true; }
 
 # --- going back to the previous release (used by the automatic and by the manual rollback) ---
 restore_previous() {
-  local previous_sha failed_sha
+  local previous_sha
   previous_sha=$(state previous)
-  failed_sha=$(state current)
   image_exists "$IMAGE:previous" || die "there is no $IMAGE:previous image to go back to"
   [ -n "$previous_sha" ] || die "no previous release recorded"
   log "going back to the previous release ($previous_sha)"
