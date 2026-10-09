@@ -4,7 +4,7 @@
 #   FAKE_DUMP_FILE    the bytes pg_dump "produces"               FAKE_DUMP_FAIL   pg_dump fails half way
 #   FAKE_DUMP_DELAY   seconds pg_dump takes                      FAKE_DB_DOWN     the database container is not running
 #   FAKE_LIST_FAIL    pg_restore --list rejects the archive      FAKE_TOC_MISSING an object missing from the table of contents
-#   FAKE_RESTORE_FAIL pg_restore (the real restore) fails        FAKE_LIVE_COUNT / FAKE_RESTORED_COUNT / FAKE_RESTORED_FLYWAY
+#   FAKE_RESTORE_FAIL pg_restore (the real restore) fails   FAKE_RESTORE_DELAY seconds the real restore takes        FAKE_LIVE_COUNT / FAKE_RESTORED_COUNT / FAKE_RESTORED_FLYWAY
 state=${FAKE_STATE:?}
 touch "$state/calls.log"
 echo "docker $*" >> "$state/calls.log"
@@ -43,6 +43,8 @@ case "$command_name" in
       *pg_restore*)
         # docker exec -i db sh -c 'pg_restore ... -d "$1" ...' sh <database>
         database=$(echo "$arguments" | awk '{print $NF}')
+        touch "$state/restore-started"
+        [ -z "${FAKE_RESTORE_DELAY:-}" ] || sleep "$FAKE_RESTORE_DELAY" # a restore that takes a while (to interrupt it)
         cat > "$state/restored-$database.bin"
         echo "pg_restore into $database: $arguments" >> "$state/calls.log"
         [ -z "${FAKE_RESTORE_FAIL:-}" ] || { echo "pg_restore: error: could not execute query" >&2; exit 1; }

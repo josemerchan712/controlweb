@@ -24,6 +24,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
@@ -100,6 +102,7 @@ class BackupScriptsTest {
 		Map<String, String> environment = new HashMap<>();
 		environment.put("PATH", bin + java.io.File.pathSeparator + (System.getenv("PATH") == null ? "" : System.getenv("PATH")));
 		environment.put("ALLOW_NON_ROOT", "1");
+		environment.put("IDENTITY_MODE_CHECK", "no"); // chmod does nothing on Windows; one Linux-only test turns it back on
 		environment.put("BACKUP_DIR", slashes(backups));
 		environment.put("STATE_DIR", slashes(stateDir));
 		environment.put("LOCK_DIR", slashes(temp.resolve("lock")));
@@ -559,5 +562,111 @@ class BackupScriptsTest {
 		assertThat(stored()).as("--no-safety-backup").hasSize(1);
 		assertThat(reserved.exit()).isEqualTo(1);
 		assertThat(reserved.output()).contains("reserved");
+	}
+
+	// ======================================================================= the identity file is destroyed on every way out
+
+	static Stream<Arguments> everyWayOut() {
+		return Stream.of(
+				Arguments.of("success", Map.of(), List.of("--yes"), 0),
+				Arguments.of("the restore fails", Map.of("FAKE_RESTORE_FAIL", "1"), List.of("--yes"), 1),
+				Arguments.of("wrong key", Map.of("FAKE_AGE_DECRYPT_FAIL", "1"), List.of("--yes"), 1),
+				Arguments.of("not a ControlWeb archive", Map.of("FAKE_LIST_FAIL", "1"), List.of("--yes"), 1),
+				Arguments.of("no --yes (it only explains)", Map.of(), List.<String>of(), 2),
+				Arguments.of("the safety backup fails", Map.of("FAKE_DUMP_FAIL", "1"), List.of("--yes"), 1),
+				Arguments.of("database container down", Map.of("FAKE_DB_DOWN", "1"), List.of("--yes"), 1),
+				Arguments.of("a mistyped option", Map.of(), List.of("--bogus"), 1));
+	}
+
+	@ParameterizedTest(name = "{0}")
+	@MethodSource("everyWayOut")
+	@DisplayName("restore: the identity file is destroyed WHATEVER the outcome (success, any failure, a refused option, only explaining)")
+	void identityIsDestroyedWhatEverHappens(String name, Map<String, String> fault, List<String> options, int expectedExit) throws Exception {
+		Path copy = storedCopy();
+		Path identity = identity();
+		List<String> arguments = new ArrayList<>(List.of("--identity", slashes(identity), "--delete-identity", "--allow-disk-identity"));
+		arguments.addAll(options);
+		arguments.add(slashes(copy));
+
+		Result result = restore(fault, arguments.toArray(String[]::new));
+
+		assertThat(result.exit()).as(result.output()).isEqualTo(expectedExit);
+		assertThat(identity).as("the identity file must be gone after: " + name).doesNotExist();
+		assertThat(result.output()).contains("was destroyed");
+	}
+
+	@Test
+	@DisplayName("restore: an identity in RAM is destroyed by default (no flag needed); an identity on a DISK is never deleted unasked")
+	void defaultsToDeletingOnlyWhatLivesInRam() throws Exception {
+		Path copy = storedCopy();
+		Path inRam = identity();
+		Process probe = new ProcessBuilder(BASH, "-c",
+				"findmnt -no FSTYPE -T \"$1\" 2>/dev/null || stat -f -c %T \"$1\" 2>/dev/null || echo unknown", "_", slashes(inRam))
+				.redirectErrorStream(true).start();
+		String filesystem = new String(probe.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
+		probe.waitFor(30, TimeUnit.SECONDS);
+
+		// the test's temporary folder is declared to be "RAM": the script treats the file as such and destroys it
+		Result asRam = restore(Map.of("RAM_FS_TYPES", filesystem), "--identity", slashes(inRam), "--yes", "--no-safety-backup", slashes(copy));
+		assertThat(asRam.exit()).as(asRam.output()).isZero();
+		assertThat(inRam).doesNotExist();
+
+		// the same folder is NOT RAM and no --delete-identity: with --allow-disk-identity the run works and the file stays
+		Path onDisk = identity();
+		Result asDisk = restore(Map.of("RAM_FS_TYPES", "no-such-filesystem"), "--identity", slashes(onDisk), "--allow-disk-identity", "--yes",
+				"--no-safety-backup", slashes(copy));
+		assertThat(asDisk.exit()).as(asDisk.output()).isZero();
+		assertThat(onDisk).as("a file on a disk is never deleted unless --delete-identity is given").exists();
+		assertThat(asDisk.output()).doesNotContain("was destroyed");
+	}
+
+	@Test
+	@DisplayName("restore: Ctrl-C (SIGINT to the whole process group) in the middle of the restore still destroys the identity file")
+	void identityIsDestroyedWhenInterrupted() throws Exception {
+		Path copy = storedCopy();
+		Path identity = identity();
+		Path output = temp.resolve("interrupted-output.txt");
+		String script = "set -m; bash deploy/backup/restore.sh --identity '" + slashes(identity) + "' --delete-identity --allow-disk-identity --yes "
+				+ "--no-safety-backup '" + slashes(copy) + "' > '" + slashes(output) + "' 2>&1 & pid=$!; "
+				+ "for i in $(seq 1 120); do [ -e '" + slashes(fakeState.resolve("restore-started")) + "' ] && break; sleep 0.5; done; "
+				+ "sleep 1; kill -INT -$pid; wait $pid; echo \"exit=$?\"";
+		ProcessBuilder builder = new ProcessBuilder(BASH, "-c", script).redirectErrorStream(true);
+		builder.directory(Path.of("").toAbsolutePath().toFile());
+		builder.environment().putAll(environment(Map.of("FAKE_RESTORE_DELAY", "120")));
+		Result outcome = finish(builder.start());
+
+		assertThat(Files.exists(fakeState.resolve("restore-started"))).as("the restore had started").isTrue();
+		assertThat(outcome.output()).as("the script died of the interruption").contains("exit=130");
+		assertThat(identity).as("the identity file must be destroyed after Ctrl-C").doesNotExist();
+		assertThat(Files.readString(output)).contains("was destroyed");
+	}
+
+	@Test
+	@DisplayName("restore: an identity file readable by others (mode other than 600) is refused, and still destroyed")
+	void looseModeIsRefused() throws Exception {
+		assumeTrue(!windows(), "file modes are not meaningful on Windows");
+		Path copy = storedCopy();
+		Path identity = identity();
+		Files.setPosixFilePermissions(identity, java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--"));
+
+		Result result = restore(Map.of("IDENTITY_MODE_CHECK", "yes"), "--identity", slashes(identity), "--delete-identity", "--allow-disk-identity", "--yes",
+				slashes(copy));
+
+		assertThat(result.exit()).isEqualTo(1);
+		assertThat(result.output()).contains("readable by others");
+		assertThat(identity).doesNotExist();
+		assertThat(calls()).doesNotContain("stopped").doesNotContain("pg_restore into");
+	}
+
+	@Test
+	@DisplayName("restore: without --identity it only explains what it would do (exit 2) and needs no key, no docker, nothing")
+	void planWithoutKey() throws Exception {
+		Path copy = storedCopy();
+
+		Result result = restore(Map.of(), slashes(copy));
+
+		assertThat(result.exit()).as(result.output()).isEqualTo(2);
+		assertThat(result.output()).contains("Would restore").contains("--identity FILE --yes");
+		assertThat(calls()).isEmpty();
 	}
 }
