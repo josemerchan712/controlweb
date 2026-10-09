@@ -263,7 +263,7 @@ Todos los errores son `application/problem+json` (RFC 9457) y no incluyen trazas
 .\mvnw.cmd verify
 ```
 
-Para iterar en un portátil con Windows, `.\mvnw.cmd verify -Pfast` salta las cuatro clases etiquetadas `slow-scripts` (los tests que
+Para iterar en un portátil con Windows, `.\mvnw.cmd verify -Pfast` salta las cinco clases etiquetadas `slow-scripts` (los tests que
 ejecutan los scripts de bash reales: unos 8 de los 13 minutos de un `verify` completo). El perfil **no está activo por defecto**: el
 `verify` normal y el CI ejecutan siempre todo, y antes de cada commit se usa el `verify` completo.
 

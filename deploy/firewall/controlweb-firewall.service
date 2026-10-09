@@ -1,0 +1,39 @@
+# Egress firewall of the ControlWeb application (see /usr/local/sbin/controlweb-firewall and docs/DESPLIEGUE.md, "Firewall de salida").
+#
+# Installed by deploy/firewall/install.sh as /etc/systemd/system/controlweb-firewall.service, root:root 0644.
+#
+# ORDER, NOT DEPENDENCY. Before=docker.service makes systemd start this unit first whenever both start, so the rules already exist when
+# Docker brings containers up. It is deliberately NOT Requires=/BindsTo=/PartOf= of Docker, in either direction:
+#   * with Requires=docker.service on a unit of ours, or Requires=this-unit on docker.service, a failure of the firewall would stop
+#     Docker from starting, and `systemctl stop controlweb-firewall` would stop Docker: Rotten Odds would go down with it.
+#   * with Before= alone, a failed firewall leaves Docker (and Rotten Odds) untouched. The price is that ControlWeb's own container
+#     could start without rules after a reboot; controlweb-firewall-guard.service (After=docker.service) closes that gap by stopping
+#     ONLY the container controlweb-app when the rules are not in place, and deploy.sh refuses to deploy while this unit is not active.
+[Unit]
+Description=ControlWeb egress firewall (rules hang off the Docker bridge cw-egress only)
+Documentation=file:///usr/local/sbin/controlweb-firewall
+Before=docker.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/controlweb-firewall start
+ExecStop=/usr/local/sbin/controlweb-firewall stop
+# if the rules go away while Docker is running (stop, or a failed start), the application must not keep running without them
+ExecStopPost=-/usr/local/sbin/controlweb-firewall guard
+TimeoutStartSec=60
+TimeoutStopSec=60
+SyslogIdentifier=controlweb-firewall
+
+# iptables needs the network namespace, root and kernel modules (xt_conntrack...): no CapabilityBoundingSet and no ProtectKernelModules here.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/run
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

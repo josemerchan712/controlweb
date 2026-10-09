@@ -342,6 +342,97 @@ Pruebas desde `controlweb-app` (S5):
 Riesgo a verificar en S5: que Docker 29 no aísle el tráfico DNAT entre bridges distintos (la prueba de hairpin hecha fue desde
 el mismo bridge). Plan B: vigilar esa URL solo con el monitor externo.
 
+### Implementación de C7c-1: firewall de salida (`controlweb-firewall`)
+
+| Fichero del repo | Se instala en | Dueño y modo |
+|---|---|---|
+| `deploy/firewall/controlweb-firewall.sh` | `/usr/local/sbin/controlweb-firewall` | root:root 0755 |
+| `deploy/firewall/controlweb-firewall.service` | `/etc/systemd/system/` | root:root 0644 |
+| `deploy/firewall/controlweb-firewall-guard.service` | `/etc/systemd/system/` | root:root 0644 |
+| `deploy/firewall/install.sh` | lo ejecutas tú con `sudo` | copia con `install`, comprueba dueño/modo y carpetas, `systemd-analyze verify`, `daemon-reload`; **no arranca, no activa, no crea la configuración** |
+| `/etc/controlweb/firewall.conf` | **la escribes tú** | `PUBLIC_IP=<IP pública del VPS>` (nunca en el repositorio) y, si hace falta, `ALLOW_DNS=<resolutores en dirección privada>`; root:root, no escribible por otros |
+
+**Todo cuelga del bridge `cw-egress`.** Solo hay dos puntos de entrada, cada uno una única regla de salto con `-i cw-egress`:
+`DOCKER-USER: -i cw-egress -j CW-EGRESS` e `INPUT: -i cw-egress -j CW-INPUT`. Un paquete que no entra por `cw-egress` (los bridges de Rotten Odds,
+`cw-proxy`, `cw-db`, la tarjeta de red, `lo`) no cumple esa regla y por tanto **nunca visita ninguna regla nuestra**. El script solo crea y borra las tres cadenas
+`CW-EGRESS`, `CW-DENY` y `CW-INPUT`: no cambia políticas, no vacía ninguna cadena de Docker ni de otro, no toca la tabla `nat`, no usa `iptables-save/restore`.
+Las reglas son las del plan (ver arriba), con `REJECT` (`tcp-reset` o `icmp-admin-prohibited`) y nunca `DROP`. El orden de trabajo es deliberado: **primero se
+rellenan las cadenas y los dos saltos se añaden los últimos** (si algo falla a medias, el `trap` quita lo nuestro y no queda un firewall a medio construir) y
+`stop` quita **primero los saltos** y luego las cadenas.
+
+*Instalar y probar sin riesgo para Rotten Odds (en el servidor, tú):*
+
+```bash
+cd ~/controlweb && git log -1 --stat && less deploy/firewall/controlweb-firewall.sh        # revisa lo que vas a instalar como root
+sudo deploy/firewall/install.sh
+echo 'PUBLIC_IP=<IP pública del VPS>' | sudo tee /etc/controlweb/firewall.conf && sudo chmod 644 /etc/controlweb/firewall.conf
+resolvectl status | grep -i 'DNS Servers'     # si algún resolutor está en 10.x, 172.16-31.x o 192.168.x: añade «ALLOW_DNS=ip ip» a firewall.conf (si no, la app no resolvería nombres)
+docker info | grep -i firewall                # si dijera «nftables» en vez de iptables, DOCKER-USER no se consulta y este firewall no vale: PARA y dímelo
+
+# 1) foto del cortafuegos actual (solo lectura), arrancar, y comparar: SOLO deben aparecer líneas nuevas CW-* y las dos de salto
+sudo iptables-save | sed 's/\[[0-9]*:[0-9]*\]//' | grep -v '^#' > /tmp/fw-antes.txt
+sudo systemctl start controlweb-firewall.service
+sudo iptables-save | sed 's/\[[0-9]*:[0-9]*\]//' | grep -v '^#' > /tmp/fw-con.txt
+diff /tmp/fw-antes.txt /tmp/fw-con.txt                        # solo «>» con CW-DENY, CW-EGRESS, CW-INPUT, sus reglas y 2 saltos «-i cw-egress»
+# 2) idempotente: aplicar otra vez no cambia nada
+sudo systemctl restart controlweb-firewall.service
+sudo iptables-save | sed 's/\[[0-9]*:[0-9]*\]//' | grep -v '^#' | diff /tmp/fw-con.txt -          # sin diferencias
+# 3) reversible: parar lo deja como estaba
+sudo systemctl stop controlweb-firewall.service
+sudo iptables-save | sed 's/\[[0-9]*:[0-9]*\]//' | grep -v '^#' | diff /tmp/fw-antes.txt -         # sin diferencias
+# 4) ahora sí, arrancar y dejarlo activado en cada arranque (el firewall primero, luego el guardián)
+sudo systemctl enable --now controlweb-firewall.service && sudo systemctl enable controlweb-firewall-guard.service
+sudo iptables -L CW-EGRESS -vn --line-numbers ; sudo iptables -L DOCKER-USER -vn --line-numbers | head -4
+```
+
+Mientras la red `controlweb_egress` no exista, el interfaz `cw-egress` no existe y las dos reglas de salto no coinciden con **nada** (ni siquiera con la propia
+aplicación): arrancar el firewall antes de desplegar es inocuo para Rotten Odds. Los comandos de la tabla de pruebas del plan (desde `controlweb-app`, paso S5:
+`wget` a `example.com`, hairpin a la API de Rotten Odds, `nc` a la BD, `169.254.169.254`, `172.28.0.10`/`172.18.0.2`, `10.77.2.1:22` y la IP pública `:22`, y
+`sudo iptables -L CW-EGRESS -vn` con contadores que suben en las reglas 2 y 4) siguen siendo la comprobación en vivo; los tests de abajo prueban la lógica, no
+sustituyen a S5. Quitarlo todo: `sudo systemctl disable --now controlweb-firewall.service controlweb-firewall-guard.service`.
+
+#### `Before=` frente a `Requires=` (y por qué hay un guardián)
+
+| Opción | Si el firewall falla o lo paras | Consecuencia |
+|---|---|---|
+| **`Before=docker.service`** (elegida) | Docker arranca igual (solo es un orden) | Rotten Odds no se entera. Coste: tras un reinicio con el firewall roto, el contenedor de ControlWeb (`restart: unless-stopped`) arrancaría sin reglas durante unos segundos → lo cubre el guardián. |
+| `Requires=` / `BindsTo=` del firewall sobre Docker, o de `docker.service` sobre el firewall (con `Before=`) | **Docker no arranca**; y `systemctl stop controlweb-firewall` **para Docker** | **Rotten Odds cae.** Descartado: `FirewallUnitsGuardianTest` prohíbe cualquier dependencia fuerte entre ambos en los dos sentidos. |
+| `Wants=` | Igual que `Before=` pero además arrastra el firewall al arrancar Docker | No aporta nada si ya está en `multi-user.target`. |
+
+**El guardián** (`controlweb-firewall-guard.service`, `After=docker.service controlweb-firewall.service`, no es dependencia de nada) ejecuta `controlweb-firewall guard`:
+si las reglas no están (comprobación real con `iptables -C`, no solo el estado de systemd), para **únicamente** el contenedor `controlweb-app` y solo si
+pertenece al proyecto de Compose `controlweb` (comprueba la etiqueta); no toca Docker, ni Rotten Odds, ni `compose`, ni borra nada; nunca hace fallar el arranque.
+El firewall lo invoca también en `ExecStopPost` (con `-`): si lo paras con la aplicación en marcha, la aplicación se para. Para volver a arrancarla, arregla el
+firewall y despliega (o `docker start controlweb-app`). Riesgo residual honesto: tras un reinicio con el firewall roto, hay una ventana de segundos entre que Docker
+arranca la aplicación y el guardián la para. Si no la quieres, la alternativa es poner `restart: "no"` y arrancarla desde una unit con `Requires=controlweb-firewall.service`
+(más piezas y cambia C6): dímelo y lo preparo.
+
+**`deploy.sh` y la aplicación expuesta sin reglas:** `deploy.sh` ejecuta `check_firewall` (`systemctl is-active controlweb-firewall.service`) al principio de `deploy` y de
+`rollback`, **antes de cargar la imagen ni tocar nada**, y se niega con «the application must not run without it» (`DeployScriptTest` «egress firewall not active: refused» y
+`FirewallUnitsGuardianTest` comprueba que la llamada está antes de `docker load` y en `rollback`). Con eso: no se despliega sin firewall (guardia de `deploy.sh`) y
+no se queda en marcha tras un reinicio sin firewall (guardián). Si alguien arranca la aplicación a mano con `docker compose up` sin firewall, ningún script lo impide
+hasta el siguiente arranque del guardián: no hay forma de prohibírselo a root.
+
+**Límites que conoces:** (1) al *reaplicar* (`restart`), las cadenas se vacían y se rellenan: durante milisegundos no filtran (solo en reaplicaciones, no en arranques);
+(2) un DNS privado se debe listar en `ALLOW_DNS` o la aplicación no resolverá; (3) sigue pendiente la prueba S5 de que Docker 29 no aísla el DNAT entre bridges (hairpin); (4) solo IPv4.
+
+*Pruebas de C7c-1.* `FirewallScriptTest` (19 casos, `@Tag("slow-scripts")`, también en CI) ejecuta el script real contra un `iptables` falso **con estado**
+(`fake-iptables.sh`: respeta que `-N` falla si existe, `-X` falla si la cadena no está vacía o sigue referenciada, `-D` falla si no existe, rechaza cualquier `-t`) y un evaluador de
+reglas (`IptablesModel`, que **falla ante cualquier regla que no entienda**, así que no se puede añadir un tipo de regla sin que las pruebas lo aprendan):
+(1) más de 10.000 paquetes de 11 interfaces que no son `cw-egress` (Rotten Odds, `cw-proxy`, `cw-db`, `eth0`, `lo`, `cw-egress2`...) × 14 destinos × 6 puertos × 3 protocolos × 4 estados
+**no visitan ninguna cadena CW-** y reciben el mismo veredicto que antes de existir el firewall; (2) las únicas reglas añadidas fuera de nuestras cadenas son los dos saltos, **en primer lugar**, y
+ninguna llamada usa otra tabla, políticas, `-Z`, `-R` ni `-E`; (3) tabla de decisiones de `cw-egress`: Internet pública pasa, 26 destinos privados/reservados se rechazan (tcp-reset o icmp-admin-prohibited) y los bordes
+de cada rango pasan, hairpin (80/443 con destino original = IP pública y ctstate DNAT) pasa y todo lo demás se rechaza, resolutor privado solo si está en `ALLOW_DNS`, INPUT rechaza SSH y todo
+desde `cw-egress` pero no cambia el SSH desde fuera; (4) aplicar 2 y 3 veces = una vez, y repara un salto borrado o una cadena manipulada; (5) `stop` deja todo **byte a byte** como estaba antes (y doble `stop` o `stop` sin arrancar no fallan);
+(6) **un fallo en cualquiera de las llamadas a iptables** (las últimas 10 una a una y una de cada 3 del resto) termina con error y sin ningún salto ni cadena CW- (y un error que no sea «no existe» no se confunde con «ausente»: no duplica saltos);
+(7) validación de la configuración (sin fichero, IP privada/metadatos/documentación/loopback/multicast, texto, código de shell, claves desconocidas, DNS inválido: no llama a iptables); (8) `status` y el guardián (solo `docker stop controlweb-app`, solo si la etiqueta es `controlweb`, nunca falla).
+`FirewallUnitsGuardianTest` (6) y `InstallFirewallScriptTest` (3, Linux, también en CI) vigilan las units y el instalador.
+
+*Mutaciones verificadas de C7c-1* (24, todas hacen fallar tests): salto sin `-i cw-egress` (FORWARD e INPUT); `DROP` en lugar de `REJECT`; sin limpieza tras un fallo; salto insertado siempre (no idempotente);
+sin hairpin en 443; sin bloquear 169.254/16; `stop` que borra cadenas antes que saltos; `stop` que deja `CW-DENY`; hairpin para cualquier destino original; vaciar `DOCKER-USER`; aceptar una IP pública privada; guardián sin comprobar el proyecto;
+INPUT sin aceptar lo establecido; errores de iptables leídos como «ausente»; salto de INPUT al final en vez de al principio; la regla 5 que rechaza todo; 172.16/12 recortado; y, en las units, `Requires=docker.service`, quitar `Before=docker.service`,
+guardián sin `After=docker.service`, sin guardián al parar, `PartOf=docker.service` y `deploy.sh` sin `check_firewall`.
+
 ## 11. Pruebas SSRF de límites
 
 `HostSafetyValidator` (resolver falso). **Permitir:** 172.67.164.248, 104.21.49.164, 172.15.255.255, 172.32.0.0, 100.63.255.255,

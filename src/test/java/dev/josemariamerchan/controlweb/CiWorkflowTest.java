@@ -46,7 +46,7 @@ class CiWorkflowTest {
 				.doesNotContain("-P fast").doesNotContain("-Pfast").doesNotContain("test.excluded.groups")
 				.doesNotContainPattern("(?m)^\\s*run:.*mvnw.*\\s-P");
 		assertThat(workflow).contains("Check that the script tests really ran here (none skipped)")
-				.contains("for test in InstallScriptTest InstallReaderScriptTest ServeBackupScriptTest BackupScriptsTest DeployScriptTest VerifyScriptsTest; do")
+				.contains("for test in InstallScriptTest InstallReaderScriptTest InstallFirewallScriptTest ServeBackupScriptTest FirewallScriptTest BackupScriptsTest DeployScriptTest VerifyScriptsTest; do")
 				.contains("tests=\"[1-9][0-9]*\" errors=\"0\" skipped=\"0\" failures=\"0\"");
 		assertThat(workflow.indexOf("Check that the script tests")).isGreaterThan(workflow.indexOf("verify\n"));
 	}

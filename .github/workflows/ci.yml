@@ -47,7 +47,7 @@ jobs:
       # report of each is checked for "some tests, none failed, none skipped".
       - name: Check that the script tests really ran here (none skipped)
         run: |
-          for test in InstallScriptTest InstallReaderScriptTest ServeBackupScriptTest BackupScriptsTest DeployScriptTest VerifyScriptsTest; do
+          for test in InstallScriptTest InstallReaderScriptTest InstallFirewallScriptTest ServeBackupScriptTest FirewallScriptTest BackupScriptsTest DeployScriptTest VerifyScriptsTest; do
             report="target/surefire-reports/TEST-dev.josemariamerchan.controlweb.deploy.$test.xml"
             if ! grep -Eq 'tests="[1-9][0-9]*" errors="0" skipped="0" failures="0"' "$report"; then
               echo "$test did not run completely on this runner:"

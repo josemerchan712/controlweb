@@ -354,7 +354,7 @@ se acepta, se borra el parcial y **no se rota nada** (rotación: 14 días, siemp
 transacción. Pruebas: `BackupScriptsTest`, `InstallScriptTest`. Detalle y comandos en `docs/DESPLIEGUE.md`.
 
 ## Tests lentos (`slow-scripts`)
-`BackupScriptsTest`, `DeployScriptTest`, `VerifyScriptsTest` y `DownloadBackupsScriptTest` llevan `@Tag("slow-scripts")` (unos 8 min de los 13 de un `verify` en Windows).
+`BackupScriptsTest`, `DeployScriptTest`, `VerifyScriptsTest` y `DownloadBackupsScriptTest` y `FirewallScriptTest` llevan `@Tag("slow-scripts")` (unos 8 min de los 13 de un `verify` en Windows).
 `-Pfast` (perfil de `pom.xml`, **sin activación por defecto**) los excluye vía `test.excluded.groups`. Regla: `-Pfast` solo para iterar;
 **antes de cada commit se ejecuta `verify` completo**, y el CI lo ejecuta siempre sin perfiles ni filtros (`CiWorkflowTest` prohíbe `-Pfast`,
 `-Dtest`, `-DskipTests` y `-Dtest.excluded.groups` en el workflow; `FastProfileGuardianTest` vigila el perfil y las etiquetas).
@@ -377,6 +377,13 @@ ssh se ejecuta con `cmd /c "ssh … < petición > copia.partial"`, nunca tuberí
 salida 1 = fallo, 3 = copia del servidor obsoleta; `-Status`, `-InstallTask`, `-VerifyRestore` que descifra con age y restaura en un PostgreSQL desechable de Docker).
 Ganchos de test: `CONTROLWEB_SSH_EXE`, `CONTROLWEB_AGE_EXE`, `CONTROLWEB_DOCKER_EXE`. Guía completa (claves age y SSH, qué copias de la privada guardar,
 tarea programada, comandos exactos): `docs/DESPLIEGUE.md`.
+
+## Firewall de salida (fase 2, paso C7c-1)
+`deploy/firewall/` (`controlweb-firewall.sh` -> `/usr/local/sbin/controlweb-firewall`, dos units, `install.sh`). Todo cuelga de `-i cw-egress` (dos saltos: `DOCKER-USER` -> `CW-EGRESS`,
+`INPUT` -> `CW-INPUT`); solo se crean/borran cadenas `CW-*`; REJECT nunca DROP; los saltos se añaden los últimos y `stop` los quita los primeros. La IP pública va en
+`/etc/controlweb/firewall.conf` (`PUBLIC_IP=`, `ALLOW_DNS=`), nunca en el repo. La unit va `Before=docker.service` y NO tiene dependencia fuerte con Docker en ningún sentido (si la tuviera,
+un fallo o un `stop` pararía Docker y Rotten Odds); `controlweb-firewall-guard.service` para SOLO `controlweb-app` si las reglas no están. Pruebas: `FirewallScriptTest` (iptables falso con estado +
+`IptablesModel`, que falla ante reglas que no entiende), `FirewallUnitsGuardianTest`, `InstallFirewallScriptTest`. Guía y comandos de comprobación: `docs/DESPLIEGUE.md`.
 
 ## Publicar y volver atrás (fase 2, paso C7a)
 `deploy/release.ps1` (PC, PowerShell 5.1: construye desde un worktree limpio de un commit subido, guarda la imagen en un fichero —nunca por

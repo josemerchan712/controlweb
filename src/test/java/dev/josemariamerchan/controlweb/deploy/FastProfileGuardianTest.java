@@ -13,11 +13,11 @@ import org.junit.jupiter.api.Test;
 
 /**
  * The opt-in Maven profile "fast" may only skip the slow script tests when somebody asks for it: it must never be active by default,
- * and the tests it hides must be exactly the four slow script classes (so nothing else disappears silently).
+ * and the tests it hides must be exactly the five slow script classes (so nothing else disappears silently).
  */
 class FastProfileGuardianTest {
 
-	private static final List<String> SLOW = List.of("BackupScriptsTest", "DeployScriptTest", "VerifyScriptsTest", "DownloadBackupsScriptTest");
+	private static final List<String> SLOW = List.of("BackupScriptsTest", "DeployScriptTest", "VerifyScriptsTest", "DownloadBackupsScriptTest", "FirewallScriptTest");
 
 	@Test
 	@DisplayName("pom: surefire excludes nothing by default; only profile 'fast' (never active by default) excludes slow-scripts")
@@ -32,7 +32,7 @@ class FastProfileGuardianTest {
 	}
 
 	@Test
-	@DisplayName("exactly BackupScriptsTest, DeployScriptTest, VerifyScriptsTest and DownloadBackupsScriptTest are tagged slow-scripts, and no other test class is")
+	@DisplayName("exactly BackupScriptsTest, DeployScriptTest, VerifyScriptsTest DownloadBackupsScriptTest and FirewallScriptTest are tagged slow-scripts, and no other test class is")
 	void onlyTheSlowClassesAreTagged() throws IOException {
 		try (var files = Files.walk(Path.of("src/test/java"))) {
 			for (Path file : files.filter(path -> path.toString().endsWith(".java")).toList()) {
