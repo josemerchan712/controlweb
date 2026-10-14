@@ -52,7 +52,10 @@ ipt() { "$IPTABLES" -w 5 "$@"; }
 # "Is it there?" questions. iptables answers 1 for "no such rule/chain"; ANY other failure (lock, kernel, bad call) is a real error and
 # must stop the script, not be mistaken for "absent" (that would, for example, add a second copy of a jump).
 rule_present() {
-  local rc=0
+  local rc=0 target="" previous="" word
+  for word in "$@"; do [ "$previous" = -j ] && target=$word; previous=$word; done
+  # nf_tables answers exit 2 (not 1) to -C when the rule jumps to a chain that does not exist: that is just "the rule is not there"
+  case "$target" in CW-*) chain_present "$target" || return 1 ;; esac
   ipt -C "$@" 2> /dev/null || rc=$?
   case $rc in 0) return 0 ;; 1) return 1 ;; *) die "iptables -C failed (exit $rc)" ;; esac
 }
@@ -190,7 +193,8 @@ cmd_status() {
 
 # Fail closed after a reboot: if Docker came up and the firewall did not, stop THE APPLICATION (never anything else).
 cmd_guard() {
-  if cmd_status > /dev/null 2>&1; then
+  # a subshell: if iptables cannot even answer, `die` must not end the guard before it stops the application (fail closed)
+  if (cmd_status) > /dev/null 2>&1; then
     log "guard: the firewall is active, nothing to do"
     return 0
   fi

@@ -1,6 +1,7 @@
 package dev.josemariamerchan.controlweb.deploy;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -112,6 +113,24 @@ class ScriptTestsGuardianTest {
 		for (String pattern : List.of("*.sh", "*.service", "*.timer", "*.sudoers", "*.caddy", "deploy/hooks/*")) {
 			assertThat(attributes).as(".gitattributes must pin %s to LF", pattern).containsPattern("(?m)^" + Pattern.quote(pattern) + "\\s+text\\s+eol=lf");
 		}
+	}
+
+	@Test
+	@DisplayName("every .sh under deploy/ is stored in git as 100755: the guide runs the installers straight with sudo, and a 100644 gives 'command not found' (deploy/linux-test is only ever run with bash)")
+	void deployScriptsAreExecutableInGit() throws Exception {
+		String listing = null;
+		try {
+			Process process = new ProcessBuilder("git", "ls-files", "-s", "--", "deploy").redirectErrorStream(true).start();
+			String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+			listing = process.waitFor() == 0 ? output : null;
+		} catch (IOException noGit) {
+			// no git on this machine
+		}
+		assumeTrue(listing != null, "not a git checkout (for instance the git-archive tree that deploy/test-linux.ps1 builds)");
+
+		List<String> offenders = listing.lines().map(line -> line.split("\\s+")).filter(part -> part.length >= 4 && part[3].endsWith(".sh"))
+				.filter(part -> !part[3].startsWith("deploy/linux-test/") && !part[0].equals("100755")).map(part -> part[0] + " " + part[3]).toList();
+		assertThat(offenders).as("scripts that git stores without the execute bit (git update-index --chmod=+x <file>)").isEmpty();
 	}
 
 	@Test

@@ -3,7 +3,8 @@
 # $FAKE_IPT_STATE, "chain.NAME", one rule per line (the arguments joined by single spaces). It enforces the same rules the real
 # one does where they matter for us:
 #   -N fails if the chain exists          -X fails if the chain is built-in, not empty, or still referenced by a "-j CHAIN"
-#   -D fails if no such rule              -C exits 1 if no such rule            -F / -S fail if the chain does not exist
+#   -D fails if no such rule              -C exits 1 if no such rule (2 if it jumps to a missing chain, as nf_tables does)
+#   -F / -S fail if the chain does not exist
 #   any "-t" (another table, e.g. nat) is refused: the firewall must only use the filter table
 # Fault injection: FAKE_IPT_FAIL_AT=n makes the n-th call fail (exit 4), counting every call. The call log is $FAKE_IPT_STATE/.log.
 # Only bash builtins are used: starting external programs is what makes a fake slow on Windows, and the tests make hundreds of calls.
@@ -102,6 +103,10 @@ case "$op" in
     ;;
   -C)
     exists "$chain" || nochain
+    # nf_tables answers exit 2 (not 1) when the rule jumps to a chain that does not exist: "Chain 'X' does not exist"
+    target="" previous=""
+    for word in $rule; do [ "$previous" = -j ] && target=$word; previous=$word; done
+    case "$target" in '' | ACCEPT | DROP | REJECT | RETURN | LOG) ;; *) exists "$target" || { echo "iptables: Chain '$target' does not exist" >&2; exit 2; } ;; esac
     load
     index_of "$rule"
     [ "$found" -ge 0 ] || norule

@@ -444,11 +444,44 @@ class FirewallScriptTest {
 	@Test
 	@DisplayName("status: 0 when the jumps and chains are in place, 1 when a jump or a chain is missing")
 	void status() throws Exception {
-		assertThat(firewall(Map.of(), "status").exit()).isEqualTo(1);
+		Result nothing = firewall(Map.of(), "status");
+		assertThat(nothing.exit()).isEqualTo(1);
+		assertThat(nothing.output()).as("real nf_tables answers exit 2 for -C towards a missing chain: that is just 'not active'").contains("DOCKER-USER does not jump to CW-EGRESS").doesNotContain("ERROR");
 		start();
 		assertThat(firewall(Map.of(), "status").exit()).isZero();
 		Files.writeString(state.resolve("chain.DOCKER-USER"), "-j RETURN\n");
 		assertThat(firewall(Map.of(), "status").exit()).isEqualTo(1);
+	}
+
+	@Test
+	@DisplayName("stop with nothing active (never started, or already stopped) succeeds and touches nothing")
+	void stopWithNothingActive() throws Exception {
+		Map<String, String> before = snapshot();
+		Result never = firewall(Map.of(), "stop");
+		start();
+		firewall(Map.of(), "stop");
+		Result again = firewall(Map.of(), "stop");
+
+		assertThat(never.exit()).as(never.output()).isZero();
+		assertThat(again.exit()).as(again.output()).isZero();
+		assertThat(snapshot()).isEqualTo(before);
+	}
+
+	@Test
+	@DisplayName("guard fails CLOSED: if iptables itself cannot say whether the firewall is active, the application is stopped, not left running")
+	void guardFailsClosed() throws Exception {
+		Path docker = fakeDocker("1a2b3c4d5e6f", false);
+		start();
+
+		Result broken = firewall(Map.of("DOCKER", slashes(docker), "FAKE_IPT_FAIL_AT", String.valueOf(calls() + 1)), "guard");
+
+		assertThat(broken.exit()).as("the guard never fails the boot").isZero();
+		assertThat(dockerCalls().lines().filter(line -> line.startsWith("stop")).toList()).containsExactly("stop 1a2b3c4d5e6f");
+	}
+
+	/** How many iptables calls the fake has seen so far (it counts every call, see FAKE_IPT_FAIL_AT). */
+	private int calls() throws IOException {
+		return Integer.parseInt(Files.readString(state.resolve(".calls")).strip());
 	}
 
 	/** A docker that answers `ps -q` with the given container ids (one per line, may be empty) and logs every call. */
