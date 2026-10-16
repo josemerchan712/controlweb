@@ -8,7 +8,7 @@
 #   1. the fragment is checked for what it may contain (only OUR site address, only `reverse_proxy controlweb-app:8080`, no import /
 #      exec / file access / environment placeholders / global options);
 #   2. it is validated by a DISPOSABLE container of the SAME image (by id) as the Caddy that is running, with the real Caddyfile and a
-#      copy of the sites folder that already contains the new fragment, no network, read-only, all capabilities dropped;
+#      copy of the sites folder that already contains the new fragment, no network, read-only, all capabilities dropped except NET_BIND_SERVICE (the Caddy binary carries setcap cap_net_bind_service, so exec fails without it);
 #   3. only then it is moved into place with an atomic rename (the temporary name starts with a dot and does not end in .caddy, so the
 #      import glob can never pick up a half-written file);
 #   4. only then `caddy reload` runs (a graceful reload: no connection is dropped);
@@ -123,7 +123,7 @@ umask 077
 umask 022
 note "validating with a disposable container of the same image as $CADDY_CONTAINER..."
 "$TIMEOUT" "$VALIDATE_TIMEOUT" "$DOCKER" run --rm --network none --memory 256m --read-only --tmpfs /tmp --tmpfs /data --tmpfs /config \
-  --cap-drop ALL --security-opt no-new-privileges --env-file "$stage/env" \
+  --cap-drop ALL --cap-add NET_BIND_SERVICE --security-opt no-new-privileges --env-file "$stage/env" \
   -v "$caddyfile:$CADDYFILE_IN_CONTAINER:ro" -v "$stage/sites:$SITES_IN_CONTAINER:ro" \
   "$image" caddy validate --config "$CADDYFILE_IN_CONTAINER" --adapter caddyfile \
   || die "Caddy rejected the configuration with this fragment: NOTHING was changed"

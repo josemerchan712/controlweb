@@ -144,7 +144,7 @@ class CaddyInstallScriptTest {
 		List<String> calls = dockerLog().lines().toList();
 		assertThat(calls.get(0)).startsWith("ps --filter label=com.docker.compose.project=rottenodds --filter label=com.docker.compose.service=caddy --filter status=running");
 		String run = calls.stream().filter(line -> line.startsWith("run ")).findFirst().orElseThrow();
-		assertThat(run).contains("--rm").contains("--network none").contains("--read-only").contains("--cap-drop ALL").contains("--security-opt no-new-privileges")
+		assertThat(run).contains("--rm").contains("--network none").contains("--read-only").contains("--cap-drop ALL").contains("--cap-add NET_BIND_SERVICE").contains("--security-opt no-new-privileges")
 				.contains("--memory 256m").contains(" " + IMAGE + " caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile").contains(slashes(caddyfile) + ":/etc/caddy/Caddyfile:ro")
 				.contains(":/etc/caddy/sites:ro").doesNotContain(" -p ").doesNotContain("--network host").doesNotContain("latest");
 		assertThat(run).as("the validated folder is a COPY, not the real sites folder").doesNotContain(slashes(sites) + ":");
