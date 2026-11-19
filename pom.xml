@@ -101,7 +101,7 @@
 			<!-- Test only: generates throw-away certificates (CA, expired, wrong host...) in memory. -->
 			<groupId>org.bouncycastle</groupId>
 			<artifactId>bcpkix-jdk18on</artifactId>
-			<version>1.86</version>
+			<version>1.87</version>
 			<scope>test</scope>
 		</dependency>
 		<dependency>
